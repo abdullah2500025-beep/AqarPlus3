@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import {
   AqarDatabaseState,
   ArchiveCategoryId,
@@ -18,6 +19,10 @@ import {
   Installment,
   JournalEntry,
   Lead,
+  LeadEscalation,
+  LeadEscalationChannel,
+  LeadEscalationStatus,
+  LeadInteraction,
   LeaseContract,
   LoginAuditEntry,
   MaintenanceTicket,
@@ -27,30 +32,40 @@ import {
   OcrSyncSummary,
   Payment,
   PaymentAllocation,
+  PaymentFrequency,
   PaymentMethod,
   PaymentType,
   PermissionKey,
   PermissionLevel,
   PermissionModuleKey,
   Property,
+  PropertyBudget,
   PurchaseOrder,
+  RecurringExpenseRule,
   ReminderChannel,
   ReminderDispatchLog,
   ReminderRule,
   RoleKey,
   SavedArchiveFilter,
+  ScheduledReportConfig,
   SecurityPolicy,
   StaffNotificationPrefs,
   StaffSecurityConfig,
   StaffStatusState,
   StaffUser,
+  SupplierInvoice,
+  SupplierInvoiceStatus,
   SyncConflictRecord,
   TaskItem,
   Tenant,
+  TenantBehaviorScores,
   TenantOnboardingChecklist,
+  TenantViolationNote,
   Unit,
   UnitStatus,
   Vendor,
+  VendorRatingBreakdown,
+  ZatcaInvoiceRecord,
 } from '../src/types/aqar';
 import { createInitialSeed, DEFAULT_ROLE_PERMISSIONS } from './seed';
 
@@ -179,8 +194,6 @@ export class AqarStore {
             users: mergedUsers,
             rolePermissions: mergedRolePermissions,
             units: shouldSeedArchive ? mergeMissingById(parsed.units, seed.units) : parsed.units,
-            tenants: shouldSeedArchive ? mergeMissingById(parsed.tenants, seed.tenants) : parsed.tenants,
-            contracts: shouldSeedArchive ? mergeMissingById(parsed.contracts, seed.contracts) : parsed.contracts,
             payments: shouldSeedArchive ? mergeMissingById(parsed.payments, seed.payments) : parsed.payments,
             tickets: shouldSeedArchive ? mergeMissingById(parsed.tickets, seed.tickets) : parsed.tickets,
             tasks: shouldSeedArchive ? mergeMissingById(parsed.tasks, seed.tasks) : parsed.tasks,
@@ -242,6 +255,38 @@ export class AqarStore {
               },
             },
             companies: Array.isArray(parsed.companies) && parsed.companies.length > 0 ? parsed.companies : seed.companies,
+            vendors: (parsed.vendors || seed.vendors).map((v) => {
+              const seedV = seed.vendors.find((sv) => sv.id === v.id);
+              return { ...seedV, ...v };
+            }),
+            tenants: (shouldSeedArchive ? mergeMissingById(parsed.tenants, seed.tenants) : parsed.tenants).map((t) => {
+              const seedT = seed.tenants.find((st) => st.id === t.id);
+              return { ...seedT, ...t };
+            }),
+            contracts: (shouldSeedArchive ? mergeMissingById(parsed.contracts, seed.contracts) : parsed.contracts).map((c) => {
+              const seedC = seed.contracts.find((sc) => sc.id === c.id);
+              return { ...seedC, ...c };
+            }),
+            leads: (parsed.leads || seed.leads).map((l) => {
+              const seedL = seed.leads.find((sl) => sl.id === l.id);
+              return { ...seedL, ...l };
+            }),
+            leadEscalations:
+              Array.isArray(parsed.leadEscalations) && parsed.leadEscalations.length > 0
+                ? parsed.leadEscalations
+                : seed.leadEscalations,
+            supplierInvoices:
+              Array.isArray(parsed.supplierInvoices) && parsed.supplierInvoices.length > 0
+                ? parsed.supplierInvoices
+                : seed.supplierInvoices,
+            recurringExpenses:
+              Array.isArray(parsed.recurringExpenses) && parsed.recurringExpenses.length > 0
+                ? parsed.recurringExpenses
+                : seed.recurringExpenses,
+            propertyBudgets:
+              Array.isArray(parsed.propertyBudgets) && parsed.propertyBudgets.length > 0
+                ? parsed.propertyBudgets
+                : seed.propertyBudgets,
             purchaseOrders: Array.isArray(parsed.purchaseOrders) ? parsed.purchaseOrders : seed.purchaseOrders,
             decisions: Array.isArray(parsed.decisions) ? parsed.decisions : seed.decisions,
             reminderRules: Array.isArray(parsed.reminderRules) ? parsed.reminderRules : seed.reminderRules,
@@ -250,6 +295,13 @@ export class AqarStore {
               Array.isArray(parsed.communicationTemplates) && parsed.communicationTemplates.length > 0
                 ? parsed.communicationTemplates
                 : seed.communicationTemplates,
+            meterReadings:
+              Array.isArray(parsed.meterReadings) && parsed.meterReadings.length > 0
+                ? parsed.meterReadings
+                : seed.meterReadings,
+            scheduledReports: Array.isArray(parsed.scheduledReports) ? parsed.scheduledReports : [],
+            zatcaInvoices: Array.isArray(parsed.zatcaInvoices) ? parsed.zatcaInvoices : [],
+            syncRevision: typeof parsed.syncRevision === 'number' ? parsed.syncRevision : 1,
           };
         }
       }
@@ -262,6 +314,7 @@ export class AqarStore {
 
   private persist(nextState: AqarDatabaseState = this.state) {
     ensureDirs();
+    nextState.syncRevision = (nextState.syncRevision || 0) + 1;
     nextState.lastUpdatedAt = new Date().toISOString();
     const tmpFile = `${DB_FILE}.tmp`;
     fs.writeFileSync(tmpFile, JSON.stringify(nextState, null, 2), 'utf-8');
@@ -295,8 +348,13 @@ export class AqarStore {
           installments: this.state.installments.filter((i) => propSet.has(i.propertyId)),
           payments: this.state.payments.filter((p) => propSet.has(p.propertyId)),
           expenses: this.state.expenses.filter((e) => propSet.has(e.propertyId)),
+          supplierInvoices: (this.state.supplierInvoices || []).filter((si) => propSet.has(si.propertyId)),
+          propertyBudgets: (this.state.propertyBudgets || []).filter((pb) => propSet.has(pb.propertyId)),
           tickets: this.state.tickets.filter((t) => propSet.has(t.propertyId)),
           tasks: this.state.tasks.filter((t) => !t.propertyId || propSet.has(t.propertyId) || t.assignedTo === user.id),
+          leads: this.state.leads.filter((l) => propSet.has(l.propertyId)),
+          leadEscalations: (this.state.leadEscalations || []).filter((le) => propSet.has(le.propertyId)),
+          meterReadings: (this.state.meterReadings || []).filter((mr) => propSet.has(mr.propertyId)),
         };
       }
       return this.state;
@@ -326,7 +384,12 @@ export class AqarStore {
       installments: this.state.installments.filter((i) => ownedPropIds.has(i.propertyId)),
       payments: this.state.payments.filter((p) => ownedPropIds.has(p.propertyId)),
       expenses: this.state.expenses.filter((e) => ownedPropIds.has(e.propertyId) && e.approvalStatus === 'معتمد'),
+      supplierInvoices: (this.state.supplierInvoices || []).filter((si) => ownedPropIds.has(si.propertyId)),
+      propertyBudgets: (this.state.propertyBudgets || []).filter((pb) => ownedPropIds.has(pb.propertyId)),
       tickets: this.state.tickets.filter((t) => ownedPropIds.has(t.propertyId)),
+      leads: this.state.leads.filter((l) => ownedPropIds.has(l.propertyId)),
+      leadEscalations: (this.state.leadEscalations || []).filter((le) => ownedPropIds.has(le.propertyId)),
+      meterReadings: (this.state.meterReadings || []).filter((mr) => ownedPropIds.has(mr.propertyId)),
       owners: this.state.owners.filter((o) => o.id === user.ownerId),
       tenants: this.state.tenants.filter((t) =>
         this.state.contracts.some((c) => ownedPropIds.has(c.propertyId) && c.tenantId === t.id)
@@ -586,9 +649,30 @@ export class AqarStore {
 
   public createLead(userId: string, input: Omit<Lead, 'id'>, deviceName?: string): Lead {
     const user = this.assertPermission(userId, 'manage_contracts');
-    const lead: Lead = { ...input, id: uid('lead') };
+    const now = new Date().toISOString();
+    const lead: Lead = {
+      ...input,
+      id: uid('lead'),
+      approvalState: input.approvalState || 'لم يُرسل',
+      rating: input.rating ?? 4,
+      createdAt: input.createdAt || now,
+      updatedAt: now,
+      interactions: input.interactions || [
+        {
+          id: uid('lint'),
+          type: 'visit',
+          direction: 'inbound',
+          summary: `تسجيل مهتم جديد (${input.source || 'إدخال يدوي'})`,
+          actorName: user.nameAr,
+          createdAt: now,
+        },
+      ],
+    };
     this.state.leads.unshift(lead);
-    this.addAudit(user, 'تسجيل عميل محتمل', 'Lead', lead.id, `تسجيل استفسار/معاينة للعميل ${lead.nameAr}`, { deviceName });
+    this.addAudit(user, 'تسجيل عميل محتمل', 'Lead', lead.id, `تسجيل استفسار/معاينة للعميل ${lead.nameAr}`, {
+      propertyId: lead.propertyId,
+      deviceName,
+    });
     this.persist();
     return lead;
   }
@@ -1122,36 +1206,100 @@ export class AqarStore {
     input: Omit<
       Expense,
       'id' | 'expenseNumber' | 'approvalStatus' | 'createdBy' | 'createdAt' | 'approvedBySupervisor' | 'approvedByManager'
-    >,
+    > & { isDraft?: boolean },
     deviceName?: string
   ): Expense {
     const user = this.assertPermission(userId, 'create_expense');
+    const { isDraft, ...restInput } = input;
 
     // Prevent duplicate invoice registration
     const dupInvoice = this.state.expenses.find(
       (e) =>
-        e.invoiceNumber.trim().toLowerCase() === input.invoiceNumber.trim().toLowerCase() &&
-        (e.vendorId || '') === (input.vendorId || '') &&
-        e.approvalStatus !== 'مرفوض'
+        e.invoiceNumber.trim() &&
+        e.invoiceNumber.trim().toLowerCase() === restInput.invoiceNumber.trim().toLowerCase() &&
+        (e.vendorId || '') === (restInput.vendorId || '') &&
+        e.approvalStatus !== 'مرفوض' &&
+        e.approvalStatus !== 'ملغى'
     );
     if (dupInvoice) {
-      throw new Error(`تنبيه: رقم الفاتورة ${input.invoiceNumber} مسجل مسبقاً (${dupInvoice.expenseNumber})`);
+      throw new Error(`تنبيه: رقم الفاتورة ${restInput.invoiceNumber} مسجل مسبقاً (${dupInvoice.expenseNumber})`);
     }
+
+    const expCurrency: CurrencyCode = restInput.currency || this.state.settings.baseCurrency || 'SAR';
+    const amountSar = toSar(restInput.amount, expCurrency, this.state.settings.currencyRatesToSar);
+    const expMonth = (restInput.date || new Date().toISOString().slice(0, 10)).slice(0, 7);
+
+    // Budget enforcement / alert check
+    const budget = (this.state.propertyBudgets || []).find(
+      (b) => b.propertyId === restInput.propertyId && b.month === expMonth
+    );
+    if (budget && budget.monthlyLimitSar > 0 && !isDraft) {
+      const spentSoFar = this.state.expenses
+        .filter(
+          (e) =>
+            e.propertyId === restInput.propertyId &&
+            e.date.startsWith(expMonth) &&
+            e.approvalStatus !== 'مرفوض' &&
+            e.approvalStatus !== 'ملغى'
+        )
+        .reduce((s, e) => s + toSar(e.amount, e.currency || 'SAR', this.state.settings.currencyRatesToSar), 0);
+      const nextTotal = spentSoFar + amountSar;
+      if (budget.blockAt100Percent && nextTotal > budget.monthlyLimitSar && user.role !== 'gm' && user.role !== 'sys_owner') {
+        throw new Error(
+          `تجاوز الميزانية الشهرية للعقار (${budget.monthlyLimitSar.toLocaleString()} ر.س): المصروف الحالي سيصل بالإجمالي إلى ${Math.round(nextTotal).toLocaleString()} ر.س. يتطلب استثناء المدير العام.`
+        );
+      }
+      const pct = Math.round((nextTotal / budget.monthlyLimitSar) * 100);
+      if (pct >= (budget.alertThresholdPercent || 80)) {
+        const prop = this.state.properties.find((p) => p.id === restInput.propertyId);
+        this.addNotification(
+          `تنبيه ميزانية ${prop?.nameAr || restInput.propertyId} (${pct}%)`,
+          `Budget Alert (${pct}%)`,
+          `وصل إجمالي مصروفات شهر ${expMonth} إلى ${Math.round(nextTotal).toLocaleString()} من أصل ${budget.monthlyLimitSar.toLocaleString()} ر.س`,
+          `Monthly spending reached ${pct}% of limit`,
+          'مالية',
+          ['gm', 'sys_owner', 'accountant', 'supervisor'],
+          'accounting'
+        );
+      }
+    }
+
+    const vatAmount =
+      restInput.vatAmount !== undefined
+        ? restInput.vatAmount
+        : Math.round((restInput.amount - restInput.amount / 1.15) * 100) / 100;
+    const netAmount =
+      restInput.netAmount !== undefined
+        ? restInput.netAmount
+        : Math.round((restInput.amount - vatAmount) * 100) / 100;
+    const paymentStatus = restInput.paymentStatus || (restInput.paymentMethod === 'آجل' ? 'لم يُدفع' : 'لم يُدفع');
+    const paidAmount =
+      restInput.paidAmount !== undefined
+        ? restInput.paidAmount
+        : paymentStatus === 'مدفوع بالكامل'
+        ? restInput.amount
+        : 0;
+    const remainingAmount = Math.max(0, Math.round((restInput.amount - paidAmount) * 100) / 100);
 
     this.state.counters.expense += 1;
     const expense: Expense = {
-      ...input,
-      currency: input.currency || this.state.settings.baseCurrency || 'SAR',
+      ...restInput,
+      vatAmount,
+      netAmount,
+      paymentStatus,
+      paidAmount,
+      remainingAmount,
+      currency: expCurrency,
       id: uid('exp'),
       expenseNumber: `EXP-2026-${pad4(this.state.counters.expense)}`,
-      approvalStatus: 'بانتظار المشرف',
+      approvalStatus: isDraft ? 'مسودة' : 'بانتظار المشرف',
       createdBy: user.id,
       createdAt: new Date().toISOString(),
     };
     this.state.expenses.unshift(expense);
 
-    if (input.ticketId) {
-      const tkt = this.state.tickets.find((t) => t.id === input.ticketId);
+    if (restInput.ticketId && !isDraft) {
+      const tkt = this.state.tickets.find((t) => t.id === restInput.ticketId);
       if (tkt) {
         tkt.linkedExpenseId = expense.id;
         tkt.actualCost = expense.amount;
@@ -1162,29 +1310,115 @@ export class AqarStore {
 
     this.addAudit(
       user,
-      'تسجيل مصروف بانتظار الاعتماد',
+      isDraft ? 'حفظ مسودة مصروف' : 'تسجيل مصروف بانتظار الاعتماد',
       'Expense',
       expense.id,
-      `رفع المصروف ${expense.expenseNumber} بمبلغ ${expense.amount.toLocaleString()} ر.س (${expense.category})`,
-      { deviceName, newValue: expense.approvalStatus }
+      `${isDraft ? 'مسودة' : 'رفع'} المصروف ${expense.expenseNumber} بمبلغ ${expense.amount.toLocaleString()} ر.س (${expense.category})`,
+      { deviceName, propertyId: expense.propertyId, newValue: expense.approvalStatus }
     );
-    this.addNotification(
-      `مصروف جديد ${expense.expenseNumber} ينتظر المراجعة`,
-      `New expense ${expense.expenseNumber} pending`,
-      `مبلغ ${expense.amount.toLocaleString()} ر.س - ${expense.category}`,
-      `${expense.amount.toLocaleString()} SAR - ${expense.category}`,
-      'مالية',
-      ['supervisor', 'gm'],
-      'accounting'
-    );
+    if (!isDraft) {
+      this.addNotification(
+        `مصروف جديد ${expense.expenseNumber} ينتظر المراجعة`,
+        `New expense ${expense.expenseNumber} pending`,
+        `مبلغ ${expense.amount.toLocaleString()} ر.س - ${expense.category}`,
+        `${expense.amount.toLocaleString()} SAR - ${expense.category}`,
+        'مالية',
+        ['supervisor', 'maint_manager', 'gm'],
+        'accounting'
+      );
+    }
     this.persist();
     return expense;
+  }
+
+  private postExpenseJournal(user: StaffUser, expense: Expense) {
+    const expCurrency: CurrencyCode = expense.currency || 'SAR';
+    const expAmountSar = toSar(expense.amount, expCurrency, this.state.settings.currencyRatesToSar);
+    this.state.counters.journal += 1;
+    const isMaint = expense.category === 'صيانة' || expense.category === 'مصروفات الصيانة';
+    const expAccId = isMaint ? 'acc-5100' : 'acc-5200';
+    const expAcc = this.state.accounts.find((a) => a.id === expAccId)!;
+    const creditAccId =
+      expense.bearer === 'المالك'
+        ? 'acc-2200'
+        : expense.paymentMethod === 'نقدي'
+        ? 'acc-1020'
+        : expense.paymentMethod === 'آجل'
+        ? 'acc-2300'
+        : 'acc-1010';
+    const creditAcc = this.state.accounts.find((a) => a.id === creditAccId)!;
+
+    if (expense.bearer === 'المالك') {
+      const bankAcc = this.state.accounts.find((a) => a.id === 'acc-1010')!;
+      const ownerAcc = this.state.accounts.find((a) => a.id === 'acc-2200')!;
+      ownerAcc.balance -= expAmountSar;
+      bankAcc.balance -= expAmountSar;
+      this.state.journals.unshift({
+        id: uid('jrn'),
+        entryNumber: `JRN-2026-${pad4(this.state.counters.journal)}`,
+        date: expense.date,
+        description: `اعتماد مصروف ${expense.expenseNumber} (${expense.category}) محمل على المالك${expCurrency !== 'SAR' ? ` [${expense.amount} ${expCurrency}]` : ''}`,
+        referenceType: 'مصروف',
+        referenceId: expense.id,
+        propertyId: expense.propertyId,
+        createdBy: user.id,
+        lines: [
+          { accountId: ownerAcc.id, accountName: ownerAcc.nameAr, debit: expAmountSar, credit: 0 },
+          { accountId: bankAcc.id, accountName: bankAcc.nameAr, debit: 0, credit: expAmountSar },
+        ],
+      });
+    } else {
+      expAcc.balance += expAmountSar;
+      creditAcc.balance -= expAmountSar;
+      this.state.journals.unshift({
+        id: uid('jrn'),
+        entryNumber: `JRN-2026-${pad4(this.state.counters.journal)}`,
+        date: expense.date,
+        description: `اعتماد مصروف ${expense.expenseNumber} (${expense.category}) على حساب ${expense.bearer}${expCurrency !== 'SAR' ? ` [${expense.amount} ${expCurrency}]` : ''}`,
+        referenceType: 'مصروف',
+        referenceId: expense.id,
+        propertyId: expense.propertyId,
+        createdBy: user.id,
+        lines: [
+          { accountId: expAcc.id, accountName: expAcc.nameAr, debit: expAmountSar, credit: 0 },
+          { accountId: creditAcc.id, accountName: creditAcc.nameAr, debit: 0, credit: expAmountSar },
+        ],
+      });
+    }
+
+    if (expense.registerAsAsset && expense.unitId) {
+      this.state.assets.unshift({
+        id: uid('ast'),
+        propertyId: expense.propertyId,
+        unitId: expense.unitId,
+        name: expense.subCategory || expense.notes || `أصل رأسمالي ${expense.expenseNumber}`,
+        category: 'أصول ومعدات رأسمالية',
+        serialNumber: expense.invoiceNumber || expense.expenseNumber,
+        brand: this.state.vendors.find((v) => v.id === expense.vendorId)?.nameAr || 'توريد مباشر',
+        purchaseDate: expense.date,
+        warrantyExpiry: `${Number(expense.date.slice(0, 4)) + 2}${expense.date.slice(4)}`,
+        condition: 'ممتاز',
+      });
+    }
+
+    if (expense.ticketId) {
+      const tkt = this.state.tickets.find((t) => t.id === expense.ticketId);
+      if (tkt) {
+        if (expense.paymentStatus === 'مدفوع بالكامل') {
+          tkt.status = 'مكتمل';
+        } else if (tkt.status === 'بانتظار اعتماد التكلفة') {
+          tkt.status = 'قيد التنفيذ';
+        }
+        tkt.actualCost = expense.amount;
+        tkt.updatedAt = new Date().toISOString();
+      }
+    }
   }
 
   public decideExpense(
     userId: string,
     expenseId: string,
-    decision: 'approve' | 'reject',
+    decision: 'approve' | 'reject' | 'submit',
     reason?: string,
     deviceName?: string
   ): Expense {
@@ -1192,16 +1426,29 @@ export class AqarStore {
     const user = this.getActingUser(userId);
     const expense = this.state.expenses.find((e) => e.id === expenseId);
     if (!expense) throw new Error('المصروف غير موجود');
-    if (expense.approvalStatus === 'معتمد' || expense.approvalStatus === 'مرفوض') {
+    if (expense.approvalStatus === 'معتمد' || expense.approvalStatus === 'مرفوض' || expense.approvalStatus === 'ملغى') {
       throw new Error('تم حسم هذا المصروف مسبقاً');
     }
 
-    // Segregation of duties: creator cannot self-approve sensitive expense unless GM override
-    if (decision === 'approve' && expense.createdBy === user.id && user.role !== 'gm') {
-      throw new Error('الفصل بين المهام: لا يمكن للموظف اعتماد مصروف قام برفعه بنفسه');
+    const oldStatus = expense.approvalStatus;
+
+    if (decision === 'submit') {
+      if (expense.approvalStatus !== 'مسودة') throw new Error('يمكن إرسال المسودات فقط للاعتماد');
+      expense.approvalStatus = 'بانتظار المشرف';
+      this.addAudit(user, 'إرسال مسودة مصروف للاعتماد', 'Expense', expense.id, `إرسال المصروف ${expense.expenseNumber} للاعتماد`, {
+        oldValue: oldStatus,
+        newValue: expense.approvalStatus,
+        propertyId: expense.propertyId,
+        deviceName,
+      });
+      this.persist();
+      return expense;
     }
 
-    const oldStatus = expense.approvalStatus;
+    // Segregation of duties: creator cannot self-approve sensitive expense unless GM/sys_owner override
+    if (decision === 'approve' && expense.createdBy === user.id && user.role !== 'gm' && user.role !== 'sys_owner') {
+      throw new Error('الفصل بين المهام: لا يمكن للموظف اعتماد مصروف قام برفعه بنفسه');
+    }
 
     if (decision === 'reject') {
       if (!reason) throw new Error('يجب ذكر سبب الرفض');
@@ -1212,88 +1459,60 @@ export class AqarStore {
         oldValue: oldStatus,
         newValue: 'مرفوض',
         reason,
+        propertyId: expense.propertyId,
         deviceName,
       });
       this.persist();
       return expense;
     }
 
-    // Approval routing based on threshold
-    const threshold = this.state.settings.supervisorApprovalThreshold;
+    const expAmountSar = toSar(expense.amount, expense.currency || 'SAR', this.state.settings.currencyRatesToSar);
+    const isTopExec = user.role === 'gm' || user.role === 'sys_owner';
+
     if (expense.approvalStatus === 'بانتظار المشرف') {
-      if (user.role === 'gm') {
+      if (isTopExec) {
         this.assertPermission(userId, 'approve_expense_manager');
         expense.approvedBySupervisor = user.id;
+        expense.approvedByDeptManager = user.id;
         expense.approvedByManager = user.id;
-        expense.approvalStatus = 'معتمد';
+        expense.approvalStatus = expAmountSar > 20000 ? 'بانتظار المالك' : 'معتمد';
       } else {
         this.assertPermission(userId, 'approve_expense_supervisor');
         expense.approvedBySupervisor = user.id;
-        expense.approvalStatus = expense.amount > threshold ? 'بانتظار المدير' : 'معتمد';
+        if (expAmountSar < 1000) {
+          expense.approvalStatus = 'معتمد';
+        } else if (expAmountSar <= 5000) {
+          expense.approvalStatus = user.role === 'maint_manager' ? 'معتمد' : 'بانتظار مدير القسم';
+          if (user.role === 'maint_manager') expense.approvedByDeptManager = user.id;
+        } else {
+          expense.approvalStatus = 'بانتظار المدير';
+        }
+      }
+    } else if (expense.approvalStatus === 'بانتظار مدير القسم') {
+      if (isTopExec) {
+        this.assertPermission(userId, 'approve_expense_manager');
+        expense.approvedByDeptManager = user.id;
+        expense.approvedByManager = user.id;
+        expense.approvalStatus = expAmountSar > 20000 ? 'بانتظار المالك' : 'معتمد';
+      } else {
+        this.assertPermission(userId, 'approve_expense_supervisor');
+        expense.approvedByDeptManager = user.id;
+        expense.approvalStatus = expAmountSar > 5000 ? 'بانتظار المدير' : 'معتمد';
       }
     } else if (expense.approvalStatus === 'بانتظار المدير') {
       this.assertPermission(userId, 'approve_expense_manager');
       expense.approvedByManager = user.id;
+      expense.approvalStatus = expAmountSar > 20000 ? 'بانتظار المالك' : 'معتمد';
+    } else if (expense.approvalStatus === 'بانتظار المالك') {
+      if (user.role !== 'owner' && user.role !== 'sys_owner' && user.role !== 'gm') {
+        throw new Error('الموافقة النهائية للمصروفات فوق 20,000 ر.س مخصصة للمالك أو مالك النظام');
+      }
+      expense.approvedByOwner = user.id;
       expense.approvalStatus = 'معتمد';
     }
 
-    // When fully approved, post to accounting journal (converted to SAR base)!
     if (expense.approvalStatus === 'معتمد') {
-      const expCurrency: CurrencyCode = expense.currency || 'SAR';
-      const expAmountSar = toSar(expense.amount, expCurrency, this.state.settings.currencyRatesToSar);
-      this.state.counters.journal += 1;
-      const expAccId = expense.category === 'صيانة' ? 'acc-5100' : 'acc-5200';
-      const expAcc = this.state.accounts.find((a) => a.id === expAccId)!;
-      const creditAccId =
-        expense.bearer === 'المالك' ? 'acc-2200' : expense.paymentMethod === 'نقدي' ? 'acc-1020' : 'acc-1010';
-      const creditAcc = this.state.accounts.find((a) => a.id === creditAccId)!;
-
-      // If bearer is Owner, deduct from Owner Payable (2200) or Bank (1010)
-      if (expense.bearer === 'المالك') {
-        const bankAcc = this.state.accounts.find((a) => a.id === 'acc-1010')!;
-        const ownerAcc = this.state.accounts.find((a) => a.id === 'acc-2200')!;
-        ownerAcc.balance -= expAmountSar;
-        bankAcc.balance -= expAmountSar;
-        this.state.journals.unshift({
-          id: uid('jrn'),
-          entryNumber: `JRN-2026-${pad4(this.state.counters.journal)}`,
-          date: expense.date,
-          description: `اعتماد مصروف ${expense.expenseNumber} (${expense.category}) محمل على المالك${expCurrency !== 'SAR' ? ` [${expense.amount} ${expCurrency}]` : ''}`,
-          referenceType: 'مصروف',
-          referenceId: expense.id,
-          propertyId: expense.propertyId,
-          createdBy: user.id,
-          lines: [
-            { accountId: ownerAcc.id, accountName: ownerAcc.nameAr, debit: expAmountSar, credit: 0 },
-            { accountId: bankAcc.id, accountName: bankAcc.nameAr, debit: 0, credit: expAmountSar },
-          ],
-        });
-      } else {
-        expAcc.balance += expAmountSar;
-        creditAcc.balance -= expAmountSar;
-        this.state.journals.unshift({
-          id: uid('jrn'),
-          entryNumber: `JRN-2026-${pad4(this.state.counters.journal)}`,
-          date: expense.date,
-          description: `اعتماد مصروف ${expense.expenseNumber} (${expense.category}) على حساب ${expense.bearer}${expCurrency !== 'SAR' ? ` [${expense.amount} ${expCurrency}]` : ''}`,
-          referenceType: 'مصروف',
-          referenceId: expense.id,
-          propertyId: expense.propertyId,
-          createdBy: user.id,
-          lines: [
-            { accountId: expAcc.id, accountName: expAcc.nameAr, debit: expAmountSar, credit: 0 },
-            { accountId: creditAcc.id, accountName: creditAcc.nameAr, debit: 0, credit: expAmountSar },
-          ],
-        });
-      }
-
-      if (expense.ticketId) {
-        const tkt = this.state.tickets.find((t) => t.id === expense.ticketId);
-        if (tkt && tkt.status === 'بانتظار اعتماد التكلفة') {
-          tkt.status = 'قيد التنفيذ';
-          tkt.updatedAt = new Date().toISOString();
-        }
-      }
+      this.postExpenseJournal(user, expense);
     }
 
     this.addAudit(
@@ -1302,7 +1521,7 @@ export class AqarStore {
       'Expense',
       expense.id,
       `تحديث اعتماد المصروف ${expense.expenseNumber} من ${oldStatus} إلى ${expense.approvalStatus}`,
-      { oldValue: oldStatus, newValue: expense.approvalStatus, deviceName }
+      { oldValue: oldStatus, newValue: expense.approvalStatus, propertyId: expense.propertyId, deviceName }
     );
     this.persist();
     return expense;
@@ -2088,11 +2307,8 @@ export class AqarStore {
     this.state.settings = {
       ...prev,
       ...patch,
-      currencyRatesToSar: {
-        ...RATES_TO_SAR,
-        ...(prev.currencyRatesToSar || {}),
-        ...(patch.currencyRatesToSar || {}),
-      },
+      baseCurrency: 'SAR',
+      currencyRatesToSar: RATES_TO_SAR,
       receiptBranding: patch.receiptBranding
         ? { ...(prev.receiptBranding || {}), ...patch.receiptBranding } as CompanySettings['receiptBranding']
         : prev.receiptBranding,
@@ -2959,14 +3175,19 @@ export class AqarStore {
 
     this.state.properties = [];
     this.state.units = [];
+    this.state.meterReadings = [];
     this.state.tenants = [];
     this.state.leads = [];
+    this.state.leadEscalations = [];
     this.state.contracts = [];
     this.state.handovers = [];
     this.state.installments = [];
     this.state.payments = [];
     this.state.journals = [];
     this.state.expenses = [];
+    this.state.supplierInvoices = [];
+    this.state.recurringExpenses = [];
+    this.state.propertyBudgets = [];
     this.state.assets = [];
     this.state.tickets = [];
     this.state.tasks = [];
@@ -3766,5 +3987,1341 @@ export class AqarStore {
     this.addAudit(actor, 'تنظيف الملفات المؤقتة', 'SystemMaintenance', 'cache', 'تنظيف ذاكرة التخزين المؤقتة', { deviceName });
     this.persist();
     return this.state.settings;
+  }
+
+  // 16. Tenant Files Center (Update Profile, Violations/Notes, Appointments, Contract Edits)
+  public updateTenant(
+    userId: string,
+    tenantId: string,
+    patch: Partial<Omit<Tenant, 'id' | 'createdAt'>>,
+    deviceName?: string
+  ): Tenant {
+    const user = this.assertPermission(userId, 'manage_tenants');
+    const tenant = this.state.tenants.find((t) => t.id === tenantId);
+    if (!tenant) throw new Error('المستأجر غير موجود');
+
+    if (patch.nationalIdOrIqama && patch.nationalIdOrIqama.trim() !== tenant.nationalIdOrIqama) {
+      const dup = this.state.tenants.find(
+        (t) => t.id !== tenantId && t.nationalIdOrIqama.trim() === patch.nationalIdOrIqama!.trim()
+      );
+      if (dup) throw new Error(`رقم الهوية/الإقامة مسجل مسبقاً للمستأجر ${dup.nameAr}`);
+    }
+
+    const oldSnapshot = JSON.stringify({
+      nameAr: tenant.nameAr,
+      phone: tenant.phone,
+      email: tenant.email,
+      nationalIdOrIqama: tenant.nationalIdOrIqama,
+      tenantType: tenant.tenantType,
+    });
+
+    Object.assign(tenant, patch);
+    if (patch.behaviorScores) {
+      const bs = patch.behaviorScores;
+      tenant.rating = Math.round(((bs.paymentCommitment + bs.unitCare + bs.cooperation) / 3) * 10) / 10;
+    }
+
+    this.addAudit(user, 'تحديث بيانات ملف المستأجر', 'Tenant', tenant.id, `تعديل بيانات المستأجر ${tenant.nameAr}`, {
+      oldValue: oldSnapshot,
+      newValue: JSON.stringify({
+        nameAr: tenant.nameAr,
+        phone: tenant.phone,
+        email: tenant.email,
+        nationalIdOrIqama: tenant.nationalIdOrIqama,
+        tenantType: tenant.tenantType,
+      }),
+      deviceName,
+    });
+    this.persist();
+    return tenant;
+  }
+
+  public addTenantViolationNote(
+    userId: string,
+    tenantId: string,
+    input: { title: string; category: TenantViolationNote['category']; details: string },
+    deviceName?: string
+  ): TenantViolationNote {
+    const user = this.assertPermission(userId, 'manage_tenants');
+    const tenant = this.state.tenants.find((t) => t.id === tenantId);
+    if (!tenant) throw new Error('المستأجر غير موجود');
+    if (!tenant.violationNotes) tenant.violationNotes = [];
+    const entry: TenantViolationNote = {
+      id: uid('vn'),
+      title: input.title,
+      category: input.category,
+      details: input.details,
+      createdBy: user.id,
+      createdAt: new Date().toISOString(),
+    };
+    tenant.violationNotes.unshift(entry);
+    this.addAudit(user, 'إضافة ملاحظة / مخالفة مستأجر', 'Tenant', tenant.id, `${input.category}: ${input.title} (${tenant.nameAr})`, {
+      deviceName,
+    });
+    this.persist();
+    return entry;
+  }
+
+  public scheduleTenantAppointment(
+    userId: string,
+    tenantId: string,
+    input: { title: string; scheduledAt: string; notes?: string; createTask?: boolean; propertyId?: string; unitId?: string },
+    deviceName?: string
+  ): CommunicationLog {
+    const user = this.getActingUser(userId);
+    const tenant = this.state.tenants.find((t) => t.id === tenantId);
+    if (!tenant) throw new Error('المستأجر غير موجود');
+
+    const log: CommunicationLog = {
+      id: uid('com'),
+      targetType: 'مستأجر',
+      targetId: tenant.id,
+      targetName: tenant.nameAr,
+      channel: 'موعد مجدول',
+      direction: 'صادر',
+      language: 'ar',
+      summary: `${input.title} — ${input.scheduledAt}${input.notes ? ` · ${input.notes}` : ''}`,
+      scheduledAt: input.scheduledAt,
+      status: 'مجدول',
+      sentBy: user.id,
+      createdAt: new Date().toISOString(),
+    };
+    this.state.communications.unshift(log);
+
+    if (input.createTask && this.userHasPermission(user, 'manage_tasks')) {
+      this.state.tasks.unshift({
+        id: uid('tsk'),
+        title: `موعد مع المستأجر ${tenant.nameAr}: ${input.title}`,
+        description: input.notes || input.title,
+        type: 'متابعة مستأجر',
+        propertyId: input.propertyId,
+        unitId: input.unitId,
+        assignedTo: user.id,
+        createdBy: user.id,
+        dueDate: input.scheduledAt.slice(0, 10),
+        priority: 'متوسط',
+        status: 'مسندة',
+        checklist: [{ text: 'تأكيد حضور الموعد وتوثيق النتيجة', done: false }],
+        comments: [],
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    this.addAudit(user, 'جدولة موعد مع مستأجر', 'Communication', log.id, `جدولة موعد (${input.title}) مع ${tenant.nameAr} بتاريخ ${input.scheduledAt}`, {
+      deviceName,
+      propertyId: input.propertyId,
+    });
+    this.persist();
+    return log;
+  }
+
+  public updateContractDetails(
+    userId: string,
+    contractId: string,
+    patch: Partial<
+      Pick<
+        LeaseContract,
+        | 'ejarNumber'
+        | 'ejarStatus'
+        | 'ejarPortalUrl'
+        | 'handoverDate'
+        | 'occupancyStartDate'
+        | 'occupancyStatus'
+        | 'keysDeliveredCount'
+        | 'remotesDeliveredCount'
+        | 'earlyTerminationFee'
+        | 'securityDeposit'
+        | 'officeFee'
+        | 'includedServices'
+        | 'notes'
+      >
+    >,
+    deviceName?: string
+  ): LeaseContract {
+    const user = this.assertPermission(userId, 'manage_contracts');
+    const contract = this.state.contracts.find((c) => c.id === contractId);
+    if (!contract) throw new Error('العقد غير موجود');
+
+    const prevSummary = `${contract.ejarNumber || '-'} / ${contract.occupancyStatus || 'نشط'}`;
+    Object.assign(contract, patch);
+    contract.version += 1;
+
+    this.addAudit(
+      user,
+      'تعديل بنود وبيانات إشغال العقد',
+      'LeaseContract',
+      contract.id,
+      `تحديث العقد ${contract.internalNumber} (الإصدار ${contract.version})`,
+      { oldValue: prevSummary, newValue: JSON.stringify(patch), propertyId: contract.propertyId, deviceName }
+    );
+    this.persist();
+    return contract;
+  }
+
+  // 17. Expenses Edit, Payment Voucher & Reasoned Cancellation + Vendors + Invoices + Budgets
+  public updateOrCancelExpense(
+    userId: string,
+    expenseId: string,
+    input: {
+      action: 'edit' | 'pay' | 'cancel';
+      patch?: Partial<Expense>;
+      paidAmount?: number;
+      paymentMethod?: Expense['paymentMethod'];
+      paidFromAccount?: string;
+      referenceNumber?: string;
+      reason?: string;
+    },
+    deviceName?: string
+  ): Expense {
+    return this.runTransaction(() => {
+      const user = this.getActingUser(userId);
+      const expense = this.state.expenses.find((e) => e.id === expenseId);
+      if (!expense) throw new Error('المصروف غير موجود');
+
+      if (input.action === 'pay') {
+        if (expense.approvalStatus !== 'معتمد') {
+          throw new Error('لا يمكن تسجيل سداد لمصروف قبل اعتماده');
+        }
+        const addedPay = Number(input.paidAmount || expense.remainingAmount || expense.amount);
+        if (addedPay <= 0) throw new Error('يجب إدخال مبلغ سداد أكبر من صفر');
+        const nextPaid = Math.min(expense.amount, Math.round(((expense.paidAmount || 0) + addedPay) * 100) / 100);
+        expense.paidAmount = nextPaid;
+        expense.remainingAmount = Math.max(0, Math.round((expense.amount - nextPaid) * 100) / 100);
+        expense.paymentStatus = expense.remainingAmount === 0 ? 'مدفوع بالكامل' : 'مدفوع جزئياً';
+        if (input.paymentMethod) expense.paymentMethod = input.paymentMethod;
+        if (input.paidFromAccount) expense.paidFromAccount = input.paidFromAccount;
+        if (input.referenceNumber) expense.referenceNumber = input.referenceNumber;
+
+        if (expense.ticketId && expense.paymentStatus === 'مدفوع بالكامل') {
+          const tkt = this.state.tickets.find((t) => t.id === expense.ticketId);
+          if (tkt) {
+            tkt.status = 'مكتمل';
+            tkt.actualCost = expense.amount;
+            tkt.updatedAt = new Date().toISOString();
+          }
+        }
+
+        this.addAudit(
+          user,
+          'تسجيل سند صرف / سداد مصروف',
+          'Expense',
+          expense.id,
+          `سداد ${addedPay.toLocaleString()} ر.س للمصروف ${expense.expenseNumber} (${expense.paymentStatus})`,
+          { propertyId: expense.propertyId, newValue: `${nextPaid} / ${expense.amount}`, deviceName }
+        );
+        this.persist();
+        return expense;
+      }
+
+      if (input.action === 'cancel') {
+        if (!input.reason || input.reason.trim().length < 4) {
+          throw new Error('يجب كتابة سبب واضح لإلغاء/حذف المصروف');
+        }
+        const prevStatus = expense.approvalStatus;
+        if (prevStatus === 'معتمد') {
+          this.assertPermission(userId, 'approve_expense_manager');
+          // Reverse financial impact if it was already posted
+          const origJournal = this.state.journals.find((j) => j.referenceId === expense.id && j.referenceType === 'مصروف');
+          if (origJournal) {
+            this.state.counters.journal += 1;
+            const revLines = origJournal.lines.map((l) => {
+              const acc = this.state.accounts.find((a) => a.id === l.accountId);
+              if (acc) {
+                if (acc.type === 'أصول' || acc.type === 'مصروفات') acc.balance += l.credit - l.debit;
+                else acc.balance += l.debit - l.credit;
+              }
+              return { accountId: l.accountId, accountName: l.accountName, debit: l.credit, credit: l.debit };
+            });
+            this.state.journals.unshift({
+              id: uid('jrn'),
+              entryNumber: `JRN-2026-${pad4(this.state.counters.journal)}`,
+              date: new Date().toISOString().slice(0, 10),
+              description: `عكس وإلغاء مصروف معتمد ${expense.expenseNumber} - السبب: ${input.reason}`,
+              referenceType: 'سند عكسي',
+              referenceId: expense.id,
+              propertyId: expense.propertyId,
+              createdBy: user.id,
+              lines: revLines,
+            });
+          }
+        } else {
+          this.assertPermission(userId, 'create_expense');
+        }
+        expense.approvalStatus = 'ملغى';
+        expense.cancellationReason = input.reason.trim();
+        this.addAudit(
+          user,
+          'إلغاء وحفظ أرشيفي لمصروف',
+          'Expense',
+          expense.id,
+          `إلغاء المصروف ${expense.expenseNumber} (${expense.amount.toLocaleString()} ر.س)`,
+          { oldValue: prevStatus, newValue: 'ملغى', reason: input.reason.trim(), propertyId: expense.propertyId, deviceName }
+        );
+        this.persist();
+        return expense;
+      }
+
+      // Edit action
+      this.assertPermission(userId, 'create_expense');
+      if (expense.approvalStatus === 'معتمد' && user.role !== 'gm' && user.role !== 'sys_owner') {
+        throw new Error('تعديل مصروف معتمد يتطلب صلاحية المدير العام');
+      }
+      const oldSummary = `${expense.category} / ${expense.amount} / ${expense.invoiceNumber}`;
+      if (input.patch) {
+        Object.assign(expense, input.patch);
+      }
+      this.addAudit(
+        user,
+        'تعديل بيانات مصروف',
+        'Expense',
+        expense.id,
+        `تعديل المصروف ${expense.expenseNumber}`,
+        { oldValue: oldSummary, newValue: `${expense.category} / ${expense.amount} / ${expense.invoiceNumber}`, propertyId: expense.propertyId, deviceName }
+      );
+      this.persist();
+      return expense;
+    });
+  }
+
+  public updateVendor(
+    userId: string,
+    vendorId: string,
+    patch: Partial<Omit<Vendor, 'id'>> & { ratingBreakdown?: VendorRatingBreakdown },
+    deviceName?: string
+  ): Vendor {
+    const user = this.assertPermission(userId, 'manage_maintenance');
+    const vendor = this.state.vendors.find((v) => v.id === vendorId);
+    if (!vendor) throw new Error('المورد غير موجود');
+
+    const oldRating = vendor.rating;
+    Object.assign(vendor, patch);
+    if (patch.ratingBreakdown) {
+      const b = patch.ratingBreakdown;
+      vendor.ratingBreakdown = b;
+      vendor.rating = Math.round(((b.quality + b.punctuality + b.pricing + b.cooperation) / 4) * 10) / 10;
+    }
+
+    this.addAudit(user, 'تحديث ملف وتقييم مورد', 'Vendor', vendor.id, `تحديث المورد ${vendor.nameAr} (التقييم: ${vendor.rating}/5)`, {
+      oldValue: String(oldRating),
+      newValue: String(vendor.rating),
+      deviceName,
+    });
+    this.persist();
+    return vendor;
+  }
+
+  public createSupplierInvoice(
+    userId: string,
+    input: Omit<SupplierInvoice, 'id' | 'invoiceCode' | 'createdBy' | 'createdAt'>,
+    deviceName?: string
+  ): SupplierInvoice {
+    const user = this.assertPermission(userId, 'create_expense');
+    if (!this.state.supplierInvoices) this.state.supplierInvoices = [];
+    const invoiceCode = `SINV-2026-${pad3(this.state.supplierInvoices.length + 1)}`;
+    const inv: SupplierInvoice = {
+      ...input,
+      id: uid('sinv'),
+      invoiceCode,
+      createdBy: user.id,
+      createdAt: new Date().toISOString(),
+    };
+    this.state.supplierInvoices.unshift(inv);
+    this.addAudit(
+      user,
+      'تسجيل فاتورة مورد تفصيلية',
+      'SupplierInvoice',
+      inv.id,
+      `فاتورة ${inv.invoiceCode} (${inv.supplierInvoiceNumber}) بقيمة ${inv.totalAmount.toLocaleString()} ر.س`,
+      { propertyId: inv.propertyId, newValue: inv.status, deviceName }
+    );
+    this.persist();
+    return inv;
+  }
+
+  public updateSupplierInvoice(
+    userId: string,
+    invoiceId: string,
+    patch: { status?: SupplierInvoiceStatus; payAmount?: number; cancellationReason?: string },
+    deviceName?: string
+  ): SupplierInvoice {
+    const user = this.getActingUser(userId);
+    if (!this.state.supplierInvoices) this.state.supplierInvoices = [];
+    const inv = this.state.supplierInvoices.find((i) => i.id === invoiceId);
+    if (!inv) throw new Error('فاتورة المورد غير موجودة');
+
+    const oldStatus = inv.status;
+    if (patch.payAmount && patch.payAmount > 0) {
+      this.assertPermission(userId, 'manage_accounting');
+      inv.paidAmount = Math.min(inv.totalAmount, Math.round((inv.paidAmount + patch.payAmount) * 100) / 100);
+      inv.remainingAmount = Math.max(0, Math.round((inv.totalAmount - inv.paidAmount) * 100) / 100);
+      inv.status = inv.remainingAmount === 0 ? 'مدفوعة بالكامل' : 'مدفوعة جزئياً';
+    } else if (patch.status) {
+      if (patch.status === 'معتمدة') {
+        this.assertPermission(userId, 'approve_expense_supervisor');
+        inv.approvedBy = user.id;
+      }
+      if (patch.status === 'ملغاة') {
+        if (!patch.cancellationReason?.trim()) throw new Error('يجب إدخال سبب إلغاء الفاتورة');
+        inv.cancellationReason = patch.cancellationReason.trim();
+      }
+      inv.status = patch.status;
+    }
+
+    this.addAudit(
+      user,
+      'تحديث فاتورة مورد',
+      'SupplierInvoice',
+      inv.id,
+      `تحديث الفاتورة ${inv.invoiceCode} إلى ${inv.status}`,
+      { oldValue: oldStatus, newValue: inv.status, reason: patch.cancellationReason, propertyId: inv.propertyId, deviceName }
+    );
+    this.persist();
+    return inv;
+  }
+
+  public createRecurringExpense(
+    userId: string,
+    input: Omit<RecurringExpenseRule, 'id' | 'createdBy' | 'createdAt'>,
+    deviceName?: string
+  ): RecurringExpenseRule {
+    const user = this.assertPermission(userId, 'create_expense');
+    if (!this.state.recurringExpenses) this.state.recurringExpenses = [];
+    const rule: RecurringExpenseRule = {
+      ...input,
+      id: uid('rexp'),
+      createdBy: user.id,
+      createdAt: new Date().toISOString(),
+    };
+    this.state.recurringExpenses.unshift(rule);
+    this.addAudit(user, 'جدولة مصروف دوري متكرر', 'RecurringExpenseRule', rule.id, `إضافة مصروف متكرر: ${rule.title}`, {
+      propertyId: rule.propertyId,
+      deviceName,
+    });
+    this.persist();
+    return rule;
+  }
+
+  public toggleRecurringExpense(userId: string, ruleId: string, enabled: boolean, deviceName?: string): RecurringExpenseRule {
+    const user = this.assertPermission(userId, 'create_expense');
+    const rule = (this.state.recurringExpenses || []).find((r) => r.id === ruleId);
+    if (!rule) throw new Error('قاعدة المصروف المتكرر غير موجودة');
+    rule.enabled = enabled;
+    this.addAudit(user, 'تحديث حالة مصروف متكرر', 'RecurringExpenseRule', rule.id, `${enabled ? 'تفعيل' : 'إيقاف'}: ${rule.title}`, {
+      propertyId: rule.propertyId,
+      deviceName,
+    });
+    this.persist();
+    return rule;
+  }
+
+  public generateDueRecurringExpenses(userId: string, targetMonth?: string, deviceName?: string): Expense[] {
+    const user = this.assertPermission(userId, 'create_expense');
+    const month = targetMonth || new Date().toISOString().slice(0, 7);
+    const created: Expense[] = [];
+
+    for (const rule of this.state.recurringExpenses || []) {
+      if (!rule.enabled || rule.lastGeneratedMonth === month) continue;
+      const dayStr = String(Math.min(28, Math.max(1, rule.dayOfMonth))).padStart(2, '0');
+      const vat = Math.round((rule.estimatedAmount - rule.estimatedAmount / 1.15) * 100) / 100;
+      this.state.counters.expense += 1;
+      const exp: Expense = {
+        id: uid('exp'),
+        expenseNumber: `EXP-2026-${pad4(this.state.counters.expense)}`,
+        date: `${month}-${dayStr}`,
+        category: rule.category,
+        subCategory: rule.subCategory,
+        propertyId: rule.propertyId,
+        unitId: rule.unitId,
+        vendorId: rule.vendorId,
+        invoiceNumber: `REC-${month.replace('-', '')}-${pad3(this.state.counters.expense)}`,
+        amount: rule.estimatedAmount,
+        vatAmount: vat,
+        netAmount: Math.round((rule.estimatedAmount - vat) * 100) / 100,
+        currency: rule.currency,
+        paymentMethod: 'تحويل بنكي',
+        paymentStatus: 'لم يُدفع',
+        paidAmount: 0,
+        remainingAmount: rule.estimatedAmount,
+        dueDate: `${month}-${dayStr}`,
+        bearer: rule.bearer,
+        approvalStatus: 'مسودة',
+        isRecurringInstance: true,
+        recurringRuleId: rule.id,
+        createdBy: user.id,
+        notes: `توليد تلقائي لمصروف متكرر (${rule.frequency}): ${rule.title}`,
+        createdAt: new Date().toISOString(),
+      };
+      this.state.expenses.unshift(exp);
+      rule.lastGeneratedMonth = month;
+      created.push(exp);
+    }
+
+    if (created.length > 0) {
+      this.addAudit(
+        user,
+        'توليد مسودات المصروفات الدورية',
+        'RecurringExpenseRule',
+        month,
+        `تم توليد ${created.length} مسودة مصروف دوري لشهر ${month}`,
+        { deviceName }
+      );
+      this.persist();
+    }
+    return created;
+  }
+
+  public upsertPropertyBudget(
+    userId: string,
+    input: { propertyId: string; month: string; monthlyLimitSar: number; alertThresholdPercent?: number; blockAt100Percent?: boolean },
+    deviceName?: string
+  ): PropertyBudget {
+    const user = this.assertPermission(userId, 'manage_accounting');
+    if (!this.state.propertyBudgets) this.state.propertyBudgets = [];
+    let existing = this.state.propertyBudgets.find((b) => b.propertyId === input.propertyId && b.month === input.month);
+    const now = new Date().toISOString();
+    if (existing) {
+      existing.monthlyLimitSar = Number(input.monthlyLimitSar);
+      if (input.alertThresholdPercent !== undefined) existing.alertThresholdPercent = input.alertThresholdPercent;
+      if (input.blockAt100Percent !== undefined) existing.blockAt100Percent = input.blockAt100Percent;
+      existing.updatedBy = user.id;
+      existing.updatedAt = now;
+    } else {
+      existing = {
+        id: uid('pbdg'),
+        propertyId: input.propertyId,
+        month: input.month,
+        monthlyLimitSar: Number(input.monthlyLimitSar),
+        alertThresholdPercent: input.alertThresholdPercent ?? 80,
+        blockAt100Percent: Boolean(input.blockAt100Percent),
+        updatedBy: user.id,
+        updatedAt: now,
+      };
+      this.state.propertyBudgets.unshift(existing);
+    }
+    this.addAudit(
+      user,
+      'تحديد ميزانية شهرية للعقار',
+      'PropertyBudget',
+      existing.id,
+      `تحديد ميزانية ${existing.month} بمبلغ ${existing.monthlyLimitSar.toLocaleString()} ر.س`,
+      { propertyId: existing.propertyId, deviceName }
+    );
+    this.persist();
+    return existing;
+  }
+
+  // 18. Lead Management, Smart Escalation to Owner/Manager & Public Prospect Intake
+  public updateLead(
+    userId: string,
+    leadId: string,
+    patch: Partial<Lead> & { newInteraction?: Omit<LeadInteraction, 'id' | 'actorName' | 'createdAt'> },
+    deviceName?: string
+  ): Lead {
+    const user = this.assertPermission(userId, 'manage_contracts');
+    const lead = this.state.leads.find((l) => l.id === leadId);
+    if (!lead) throw new Error('ملف المهتم غير موجود');
+
+    const { newInteraction, ...rest } = patch;
+    Object.assign(lead, rest);
+    lead.updatedAt = new Date().toISOString();
+
+    if (newInteraction) {
+      if (!lead.interactions) lead.interactions = [];
+      lead.interactions.unshift({
+        id: uid('lint'),
+        type: newInteraction.type,
+        direction: newInteraction.direction,
+        summary: newInteraction.summary,
+        actorName: user.nameAr,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    this.addAudit(
+      user,
+      newInteraction ? 'تسجيل تواصل مع مهتم' : 'تحديث ملف مهتم',
+      'Lead',
+      lead.id,
+      newInteraction ? `${newInteraction.summary} (${lead.nameAr})` : `تحديث بيانات المهتم ${lead.nameAr}`,
+      { propertyId: lead.propertyId, deviceName }
+    );
+    this.persist();
+    return lead;
+  }
+
+  public createPublicLead(input: {
+    nameAr: string;
+    phone: string;
+    email?: string;
+    nationalIdOrIqama?: string;
+    birthDate?: string;
+    idImageDataUrl?: string;
+    tenantType?: Lead['tenantType'];
+    familyMembersCount?: number;
+    companyCrNumber?: string;
+    propertyId?: string;
+    unitId?: string;
+    budgetMonthly?: number;
+    roomsRequired?: number;
+    moveInDate?: string;
+    notes?: string;
+    source?: string;
+  }): { lead: Lead; merged: boolean; propertyName: string } {
+    if (!input.nameAr?.trim() || !input.phone?.trim()) {
+      throw new Error('يرجى إدخال الاسم ورقم الجوال');
+    }
+    const cleanPhone = input.phone.trim();
+    const now = new Date().toISOString();
+
+    const targetUnit =
+      (input.unitId && this.state.units.find((u) => u.id === input.unitId)) ||
+      (input.propertyId && this.state.units.find((u) => u.propertyId === input.propertyId && u.status === 'شاغرة')) ||
+      this.state.units.find((u) => u.status === 'شاغرة') ||
+      this.state.units[0];
+
+    const targetProp =
+      (input.propertyId && this.state.properties.find((p) => p.id === input.propertyId)) ||
+      (targetUnit && this.state.properties.find((p) => p.id === targetUnit.propertyId)) ||
+      this.state.properties[0];
+
+    // Smart duplicate phone detection: merge into existing lead instead of creating duplicate
+    const existingLead = this.state.leads.find((l) => l.phone.trim() === cleanPhone);
+    if (existingLead) {
+      existingLead.updatedAt = now;
+      if (input.nationalIdOrIqama?.trim()) existingLead.nationalIdOrIqama = input.nationalIdOrIqama.trim();
+      if (input.birthDate?.trim()) existingLead.birthDate = input.birthDate.trim();
+      if (input.idImageDataUrl) existingLead.idImageDataUrl = input.idImageDataUrl;
+      if (input.notes) {
+        existingLead.notes = `${existingLead.notes ? `${existingLead.notes} | ` : ''}اهتمام جديد (${now.slice(0, 10)}): ${input.notes}`;
+      }
+      if (!existingLead.interactions) existingLead.interactions = [];
+      existingLead.interactions.unshift({
+        id: uid('lint'),
+        type: 'visit',
+        direction: 'inbound',
+        summary: `إعادة تسجيل اهتمام عبر ${input.source || 'رابط التسجيل العام'}${targetProp ? ` (${targetProp.nameAr})` : ''}`,
+        actorName: 'بوابة التسجيل الذكية',
+        createdAt: now,
+      });
+      this.addNotification(
+        `تجديد اهتمام عميل مسجل: ${existingLead.nameAr}`,
+        `Returning lead inquiry: ${existingLead.nameAr}`,
+        `تم ربط طلب جديد برقم الجوال ${cleanPhone} تلقائياً دون تكرار.`,
+        `Linked duplicate phone ${cleanPhone} automatically.`,
+        'تشغيلية',
+        ['leasing', 'gm', 'supervisor'],
+        'tenants'
+      );
+      this.persist();
+      return { lead: existingLead, merged: true, propertyName: targetProp?.nameAr || 'العقار' };
+    }
+
+    const lead: Lead = {
+      id: uid('lead'),
+      nameAr: input.nameAr.trim(),
+      phone: cleanPhone,
+      email: input.email?.trim() || undefined,
+      nationalIdOrIqama: input.nationalIdOrIqama?.trim() || undefined,
+      birthDate: input.birthDate?.trim() || undefined,
+      idImageDataUrl: input.idImageDataUrl || undefined,
+      tenantType: input.tenantType || 'فرد',
+      familyMembersCount: input.familyMembersCount,
+      companyCrNumber: input.companyCrNumber,
+      source: input.source || 'رابط التسجيل العام',
+      propertyId: targetProp?.id || '',
+      unitId: targetUnit?.id || '',
+      offeredRent: targetUnit?.suggestedMonthlyRent || input.budgetMonthly || 3500,
+      paymentFrequency: 'شهري',
+      officeFee: targetUnit?.officeFee || 500,
+      earlyTerminationFee: 1000,
+      budgetMonthly: input.budgetMonthly,
+      roomsRequired: input.roomsRequired,
+      moveInDate: input.moveInDate,
+      viewingDate: now.slice(0, 10),
+      status: 'جديد',
+      approvalState: 'لم يُرسل',
+      rating: 4,
+      assignedTo: 'usr-lease',
+      notes: input.notes?.trim() || 'مسجل ذاتياً عبر نموذج الاستقطاب العام',
+      createdAt: now,
+      updatedAt: now,
+      interactions: [
+        {
+          id: uid('lint'),
+          type: 'visit',
+          direction: 'inbound',
+          summary: `تسجيل ذاتي من بوابة المهتمين (${input.source || 'رابط عام'})`,
+          actorName: input.nameAr.trim(),
+          createdAt: now,
+        },
+      ],
+    };
+
+    this.state.leads.unshift(lead);
+    this.addNotification(
+      `مهتم جديد عبر البوابة العامة: ${lead.nameAr}`,
+      `New Public Prospect: ${lead.nameAr}`,
+      `${targetProp?.nameAr || ''} ${targetUnit ? `· وحدة ${targetUnit.unitNumber}` : ''} · ${lead.phone}`,
+      `${lead.phone} · ${lead.source}`,
+      'تشغيلية',
+      ['leasing', 'gm', 'supervisor'],
+      'tenants'
+    );
+    this.persist();
+    return { lead, merged: false, propertyName: targetProp?.nameAr || 'العقار' };
+  }
+
+  public escalateLead(
+    userId: string,
+    leadId: string,
+    input: {
+      recipientType: 'internal' | 'owner';
+      recipientId: string;
+      channel: LeadEscalationChannel;
+      priority?: 'عادي' | 'عاجل';
+      employeeNotes?: string;
+      rentAmount?: number;
+      paymentFrequency?: PaymentFrequency;
+      officeFee?: number;
+      earlyTerminationFee?: number;
+      unitId?: string;
+      nationalIdOrIqama?: string;
+      birthDate?: string;
+      idImageDataUrl?: string;
+    },
+    deviceName?: string
+  ): LeadEscalation {
+    const user = this.assertPermission(userId, 'manage_contracts');
+    const lead = this.state.leads.find((l) => l.id === leadId);
+    if (!lead) throw new Error('ملف المهتم غير موجود');
+
+    const unit = this.state.units.find((u) => u.id === (input.unitId || lead.unitId)) || this.state.units[0];
+    const prop = this.state.properties.find((p) => p.id === (unit?.propertyId || lead.propertyId)) || this.state.properties[0];
+    if (!prop || !unit) throw new Error('يرجى تحديد العقار والوحدة قبل الإرسال');
+
+    if (input.rentAmount !== undefined) lead.offeredRent = input.rentAmount;
+    if (input.paymentFrequency) lead.paymentFrequency = input.paymentFrequency;
+    if (input.officeFee !== undefined) lead.officeFee = input.officeFee;
+    if (input.earlyTerminationFee !== undefined) lead.earlyTerminationFee = input.earlyTerminationFee;
+    if (input.nationalIdOrIqama !== undefined) lead.nationalIdOrIqama = input.nationalIdOrIqama.trim() || undefined;
+    if (input.birthDate !== undefined) lead.birthDate = input.birthDate.trim() || undefined;
+    if (input.idImageDataUrl !== undefined) lead.idImageDataUrl = input.idImageDataUrl || undefined;
+    lead.unitId = unit.id;
+    lead.propertyId = prop.id;
+
+    let recipientName = '';
+    let recipientPhone = '';
+    let recipientEmail = '';
+    let targetRoles: RoleKey[] = ['gm', 'supervisor'];
+
+    if (input.recipientType === 'owner') {
+      const owner = this.state.owners.find((o) => o.id === input.recipientId);
+      if (!owner) throw new Error('المالك المختار غير موجود');
+      recipientName = owner.nameAr;
+      recipientPhone = owner.phone;
+      recipientEmail = owner.email;
+      targetRoles = ['owner', 'gm'];
+    } else {
+      const mgr = this.state.users.find((u) => u.id === input.recipientId);
+      if (!mgr) throw new Error('المسؤول المختار غير موجود');
+      recipientName = mgr.nameAr;
+      recipientPhone = mgr.phone;
+      recipientEmail = mgr.email;
+      targetRoles = [mgr.role];
+    }
+
+    if (!this.state.leadEscalations) this.state.leadEscalations = [];
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
+    const requestCode = `ESC-2026-${pad3(this.state.leadEscalations.length + 1)}`;
+    const token = `tok-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const company = (prop.companyId && this.state.companies?.find((c) => c.id === prop.companyId)) || undefined;
+    const companyName = company?.nameAr || this.state.settings.nameAr;
+
+    const esc: LeadEscalation = {
+      id: uid('lesc'),
+      requestCode,
+      leadId: lead.id,
+      propertyId: prop.id,
+      unitId: unit.id,
+      recipientType: input.recipientType,
+      recipientId: input.recipientId,
+      recipientName,
+      recipientPhone,
+      recipientEmail,
+      channel: input.channel,
+      status: 'بانتظار الموافقة',
+      priority: input.priority || 'عادي',
+      employeeNotes: input.employeeNotes?.trim() || lead.notes || undefined,
+      token,
+      tokenExpiresAt: expiresAt,
+      snapshot: {
+        companyName,
+        propertyName: prop.nameAr,
+        unitNumber: unit.unitNumber,
+        leadName: lead.nameAr,
+        nationalIdOrIqama: lead.nationalIdOrIqama,
+        hasIdPhoto: Boolean(lead.idImageDataUrl),
+        idImageDataUrl: lead.idImageDataUrl,
+        birthDate: lead.birthDate,
+        phone: lead.phone,
+        rentAmount: lead.offeredRent,
+        paymentFrequency: lead.paymentFrequency || 'شهري',
+        officeFee: lead.officeFee ?? unit.officeFee ?? 0,
+        earlyTerminationFee: lead.earlyTerminationFee ?? 1000,
+        employeeNotes: input.employeeNotes?.trim() || lead.notes || undefined,
+        registrationDate: (lead.createdAt || now).slice(0, 10),
+        registrationSource: lead.source || 'إدخال يدوي',
+      },
+      createdBy: user.id,
+      createdByName: user.nameAr,
+      createdAt: now,
+    };
+
+    this.state.leadEscalations.unshift(esc);
+    lead.approvalState = 'بانتظار الموافقة';
+    lead.updatedAt = now;
+    if (!lead.interactions) lead.interactions = [];
+    lead.interactions.unshift({
+      id: uid('lint'),
+      type: 'escalation',
+      direction: 'outbound',
+      summary: `إرسال بطاقة بيانات المهتم (${esc.requestCode}) عبر ${esc.channel} إلى ${recipientName}`,
+      actorName: user.nameAr,
+      createdAt: now,
+    });
+
+    this.addNotification(
+      `طلب مراجعة مهتم جديد ${esc.requestCode}: ${lead.nameAr}`,
+      `Lead Approval Request ${esc.requestCode}`,
+      `${prop.nameAr} · وحدة ${unit.unitNumber} · الإيجار ${esc.snapshot.rentAmount.toLocaleString()} ر.س (${esc.snapshot.paymentFrequency})`,
+      `${lead.nameAr} · ${unit.unitNumber}`,
+      'تشغيلية',
+      targetRoles,
+      'tenants'
+    );
+
+    this.addAudit(
+      user,
+      'إرسال بيانات مهتم للمالك أو المسؤول',
+      'LeadEscalation',
+      esc.id,
+      `تصعيد ملف المهتم ${lead.nameAr} (${esc.requestCode}) إلى ${recipientName} عبر ${esc.channel}`,
+      { propertyId: prop.id, newValue: esc.status, deviceName }
+    );
+    this.persist();
+    return esc;
+  }
+
+  public getLeadEscalationByToken(token: string): {
+    escalation: LeadEscalation;
+    expired: boolean;
+    propertyName: string;
+    unitNumber: string;
+    unitType: string;
+  } {
+    const esc = (this.state.leadEscalations || []).find((e) => e.token === token);
+    if (!esc) throw new Error('رابط المراجعة غير صالح أو غير موجود');
+    const expired = new Date(esc.tokenExpiresAt).getTime() < Date.now() && esc.status === 'بانتظار الموافقة';
+    const unit = this.state.units.find((u) => u.id === esc.unitId);
+    return {
+      escalation: esc,
+      expired,
+      propertyName: esc.snapshot.propertyName,
+      unitNumber: esc.snapshot.unitNumber,
+      unitType: unit?.unitType || 'شقة',
+    };
+  }
+
+  public decideLeadEscalation(
+    actorUserId: string | null,
+    escalationIdOrToken: string,
+    input: { decision: Exclude<LeadEscalationStatus, 'بانتظار الموافقة'>; decisionNotes?: string; isToken?: boolean },
+    deviceName?: string
+  ): LeadEscalation {
+    if (!this.state.leadEscalations) this.state.leadEscalations = [];
+    const esc = input.isToken
+      ? this.state.leadEscalations.find((e) => e.token === escalationIdOrToken)
+      : this.state.leadEscalations.find((e) => e.id === escalationIdOrToken);
+
+    if (!esc) throw new Error('طلب المراجعة غير موجود');
+    if (input.isToken && new Date(esc.tokenExpiresAt).getTime() < Date.now() && esc.status === 'بانتظار الموافقة') {
+      throw new Error('انتهت صلاحية رابط الموافقة (72 ساعة)');
+    }
+    if ((input.decision === 'مرفوض' || input.decision === 'أريد تعديلات') && !input.decisionNotes?.trim()) {
+      throw new Error(input.decision === 'مرفوض' ? 'يرجى كتابة سبب الرفض' : 'يرجى توضيح التعديلات المطلوبة');
+    }
+
+    const actingUser = actorUserId ? this.state.users.find((u) => u.id === actorUserId && u.active) : undefined;
+    if (!input.isToken && !actingUser) {
+      throw new Error('يجب تسجيل الدخول للبت في الطلب');
+    }
+
+    const deciderName = input.isToken ? esc.recipientName : actingUser!.nameAr;
+    const now = new Date().toISOString();
+    const oldStatus = esc.status;
+    esc.status = input.decision;
+    esc.decisionNotes = input.decisionNotes?.trim() || undefined;
+    esc.decidedBy = deciderName;
+    esc.decidedAt = now;
+
+    const lead = this.state.leads.find((l) => l.id === esc.leadId);
+    if (lead) {
+      lead.approvalState =
+        input.decision === 'موافق'
+          ? 'موافق'
+          : input.decision === 'مرفوض'
+          ? 'مرفوض'
+          : 'مطلوب تعديلات';
+      lead.updatedAt = now;
+      if (!lead.interactions) lead.interactions = [];
+      lead.interactions.unshift({
+        id: uid('lint'),
+        type: 'decision',
+        direction: 'inbound',
+        summary: `قرار ${deciderName} (${esc.requestCode}): ${input.decision}${esc.decisionNotes ? ` — ${esc.decisionNotes}` : ''}`,
+        actorName: deciderName,
+        createdAt: now,
+      });
+    }
+
+    this.addNotification(
+      `قرار طلب المهتم ${esc.requestCode}: ${input.decision}`,
+      `Lead Decision ${esc.requestCode}: ${input.decision}`,
+      `${esc.snapshot.leadName} · ${deciderName}${esc.decisionNotes ? ` · "${esc.decisionNotes}"` : ''}`,
+      `${esc.snapshot.leadName} · ${input.decision}`,
+      'تشغيلية',
+      ['leasing', 'supervisor', 'gm'],
+      'tenants'
+    );
+
+    const auditActor: StaffUser = actingUser || {
+      id: esc.recipientId,
+      nameAr: deciderName,
+      nameEn: deciderName,
+      role: 'owner',
+      roleLabelAr: 'مالك عبر رابط آمن',
+      roleLabelEn: 'External Owner Link',
+      email: esc.recipientEmail || '',
+      phone: esc.recipientPhone || '',
+      approvalLimitSar: 0,
+      active: true,
+      deviceName: deviceName || 'External Owner Portal',
+      lastActiveAt: now,
+    };
+
+    this.addAudit(
+      auditActor,
+      `قرار المراجع على طلب مهتم (${input.decision})`,
+      'LeadEscalation',
+      esc.id,
+      `بت ${deciderName} في طلب المهتم ${esc.snapshot.leadName} (${esc.requestCode}): ${input.decision}`,
+      { oldValue: oldStatus, newValue: esc.status, reason: esc.decisionNotes, propertyId: esc.propertyId, deviceName }
+    );
+    this.persist();
+    return esc;
+  }
+
+  public convertLeadToTenant(userId: string, leadId: string, deviceName?: string): { lead: Lead; tenant: Tenant } {
+    return this.runTransaction(() => {
+      const user = this.assertPermission(userId, 'manage_tenants');
+      const lead = this.state.leads.find((l) => l.id === leadId);
+      if (!lead) throw new Error('ملف المهتم غير موجود');
+      if (lead.convertedToTenantId) {
+        const existing = this.state.tenants.find((t) => t.id === lead.convertedToTenantId);
+        if (existing) return { lead, tenant: existing };
+      }
+
+      const dupTenant = lead.nationalIdOrIqama
+        ? this.state.tenants.find((t) => t.nationalIdOrIqama === lead.nationalIdOrIqama)
+        : this.state.tenants.find((t) => t.phone === lead.phone);
+
+      let tenant: Tenant;
+      const now = new Date().toISOString();
+      if (dupTenant) {
+        tenant = dupTenant;
+      } else {
+        tenant = {
+          id: uid('ten'),
+          nameAr: lead.nameAr,
+          nameEn: '',
+          nationalIdOrIqama: lead.nationalIdOrIqama || `10${Math.floor(10000000 + Math.random() * 89999999)}`,
+          nationality: 'سعودي',
+          phone: lead.phone,
+          email: lead.email || '',
+          tenantType: lead.tenantType || 'فرد',
+          birthDate: lead.birthDate,
+          familyMembersCount: lead.familyMembersCount,
+          classification: 'محتمل',
+          rating: lead.rating ?? 4,
+          behaviorScores: { paymentCommitment: 4, unitCare: 4, cooperation: 4, penaltyTotal: 0 },
+          onboardingChecklist: {
+            idVerified: Boolean(lead.nationalIdOrIqama),
+            docsArchived: Boolean(lead.idImageDataUrl),
+            depositPaid: false,
+            contractSigned: false,
+            ejarRegistered: false,
+            handoverSigned: false,
+          },
+          notes: lead.notes ? `محوّل من مهتم (${lead.source}): ${lead.notes}` : `محوّل من مهتم (${lead.source})`,
+          createdAt: now,
+        };
+        this.state.tenants.unshift(tenant);
+      }
+
+      lead.status = 'تحويل لعقد';
+      lead.convertedToTenantId = tenant.id;
+      lead.updatedAt = now;
+      if (!lead.interactions) lead.interactions = [];
+      lead.interactions.unshift({
+        id: uid('lint'),
+        type: 'decision',
+        direction: 'outbound',
+        summary: `تم تحويل المهتم إلى ملف مستأجر رسمي (${tenant.nameAr})`,
+        actorName: user.nameAr,
+        createdAt: now,
+      });
+
+      this.addAudit(
+        user,
+        'تحويل مهتم إلى مستأجر',
+        'Lead',
+        lead.id,
+        `تحويل المهتم ${lead.nameAr} إلى ملف مستأجر (${tenant.id})`,
+        { propertyId: lead.propertyId, newValue: tenant.id, deviceName }
+      );
+      this.persist();
+      return { lead, tenant };
+    });
+  }
+
+  // 19. Utility Meters & Readings (Exclusive Currency Selector)
+  public createMeterReading(
+    userId: string,
+    input: {
+      propertyId: string;
+      unitId?: string;
+      meterType: 'كهرباء' | 'مياه';
+      meterNumber: string;
+      previousReading: number;
+      currentReading: number;
+      billAmount: number;
+      currency: CurrencyCode;
+      billingPeriod: string;
+      paidBy?: 'المستأجر' | 'المالك' | 'الشركة';
+      notes?: string;
+    },
+    deviceName?: string
+  ) {
+    const user = this.assertPermission(userId, 'manage_properties');
+    const prop = this.state.properties.find((p) => p.id === input.propertyId);
+    if (!prop) throw new Error('العقار غير موجود');
+    if (!input.meterNumber?.trim()) throw new Error('يرجى إدخال رقم العداد');
+    const prevVal = Number(input.previousReading || 0);
+    const currVal = Number(input.currentReading || 0);
+    if (currVal < prevVal) throw new Error('القراءة الحالية يجب أن تكون أكبر من أو تساوي القراءة السابقة');
+
+    if (!this.state.meterReadings) this.state.meterReadings = [];
+    const reading = {
+      id: uid('mr'),
+      readingNumber: `MTR-2026-${pad3(this.state.meterReadings.length + 1)}`,
+      propertyId: prop.id,
+      unitId: input.unitId || undefined,
+      meterType: input.meterType,
+      meterNumber: input.meterNumber.trim(),
+      previousReading: prevVal,
+      currentReading: currVal,
+      consumption: Math.max(0, currVal - prevVal),
+      billAmount: Number(input.billAmount || 0),
+      currency: input.currency || 'SAR',
+      billingPeriod: input.billingPeriod || '2026-11',
+      paidBy: input.paidBy || 'المستأجر',
+      recordedBy: user.nameAr,
+      notes: input.notes?.trim() || undefined,
+      createdAt: new Date().toISOString(),
+    };
+    this.state.meterReadings.unshift(reading);
+    this.addAudit(
+      user,
+      'تسجيل قراءة عداد',
+      'MeterReading',
+      reading.id,
+      `قراءة عداد ${reading.meterType} (${reading.meterNumber}) بقيمة ${reading.billAmount} ${reading.currency}`,
+      { propertyId: prop.id, newValue: String(reading.currentReading), deviceName }
+    );
+    this.persist();
+    return reading;
+  }
+
+  // 20. Sync Engine (Delta Pull & Multi-Device Conflict Evaluation)
+  public getSyncDelta(userId: string, sinceIso?: string) {
+    const conflicts = this.state.syncConflicts || [];
+    const pendingConflictsCount = conflicts.filter((c) => c.status === 'بانتظار مراجعة المدير').length;
+    const hasChanges = !sinceIso || this.state.lastUpdatedAt > sinceIso;
+    return {
+      hasChanges,
+      serverRevision: this.state.syncRevision || 1,
+      lastUpdatedAt: this.state.lastUpdatedAt,
+      pendingConflictsCount,
+      syncConflicts: conflicts,
+      state: hasChanges ? this.getStateForUser(userId) : undefined,
+    };
+  }
+
+  public evaluateSyncOperationConflict(
+    userId: string,
+    op: {
+      idempotencyKey: string;
+      method: 'POST' | 'PATCH';
+      endpoint: string;
+      descriptionAr: string;
+      queuedAt: string;
+      deviceName?: string;
+    },
+    clientLastUpdatedAt?: string
+  ): { skipDuplicate: boolean; conflict?: SyncConflictRecord } {
+    if (this.idempotencyIndex.has(op.idempotencyKey)) {
+      return { skipDuplicate: true };
+    }
+    const isPatch = op.method === 'PATCH';
+    const hasConcurrentUpdate = Boolean(clientLastUpdatedAt && this.state.lastUpdatedAt > clientLastUpdatedAt);
+    if (isPatch && hasConcurrentUpdate) {
+      const user = this.state.users.find((u) => u.id === userId);
+      const policy = this.state.settings.syncCenter?.conflictResolution || 'latest_wins';
+      const status: SyncConflictRecord['status'] =
+        policy === 'manual_review'
+          ? 'بانتظار مراجعة المدير'
+          : policy === 'current_device'
+          ? 'تم اعتماد التعديل الأحدث'
+          : 'تم اعتماد التعديل الأحدث';
+      const conflict: SyncConflictRecord = {
+        id: uid('cnf'),
+        entityType: 'SyncBatch',
+        entityId: op.endpoint,
+        entityLabel: op.descriptionAr || op.endpoint,
+        firstActorName: 'الخادم المركزي (تعديل متزامن)',
+        secondActorName: `${user?.nameAr || userId} (${op.deviceName || 'جهاز طرفي'})`,
+        firstChangeSummary: `تعديل سابق على الخادم بتاريخ ${this.state.lastUpdatedAt.slice(0, 16).replace('T', ' ')}`,
+        secondChangeSummary: `مزامنة من وضع عدم الاتصال (${op.descriptionAr})`,
+        status,
+        resolvedBy: status === 'بانتظار مراجعة المدير' ? undefined : 'محرك المزامنة التلقائي',
+        resolvedAt: status === 'بانتظار مراجعة المدير' ? undefined : new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+      if (!this.state.syncConflicts) this.state.syncConflicts = [];
+      this.state.syncConflicts.unshift(conflict);
+      this.persist();
+      return { skipDuplicate: false, conflict };
+    }
+    return { skipDuplicate: false };
+  }
+
+  // 21. Advanced Report Builder — Scheduled Reports
+  public createScheduledReport(
+    userId: string,
+    input: {
+      title: string;
+      dataset: ScheduledReportConfig['dataset'];
+      frequency: ScheduledReportConfig['frequency'];
+      deliveryChannel: ScheduledReportConfig['deliveryChannel'];
+      recipient: string;
+      fields: string[];
+      groupBy?: ScheduledReportConfig['groupBy'];
+    },
+    deviceName?: string
+  ): ScheduledReportConfig {
+    const user = this.assertPermission(userId, 'view_audit');
+    if (!input.title?.trim()) throw new Error('يرجى إدخال عنوان التقرير المجدول');
+    if (!this.state.scheduledReports) this.state.scheduledReports = [];
+    const schedule: ScheduledReportConfig = {
+      id: uid('sch'),
+      title: input.title.trim(),
+      dataset: input.dataset,
+      frequency: input.frequency || 'أسبوعي',
+      deliveryChannel: input.deliveryChannel || 'بريد إلكتروني',
+      recipient: input.recipient?.trim() || user.email,
+      fields: Array.isArray(input.fields) && input.fields.length > 0 ? input.fields : ['id'],
+      groupBy: input.groupBy || 'none',
+      enabled: true,
+      createdBy: user.nameAr,
+      createdAt: new Date().toISOString(),
+    };
+    this.state.scheduledReports.unshift(schedule);
+    this.addAudit(
+      user,
+      'إنشاء جدولة تقرير تلقائي',
+      'ScheduledReport',
+      schedule.id,
+      `جدولة التقرير (${schedule.title}) بتكرار ${schedule.frequency} عبر ${schedule.deliveryChannel}`,
+      { deviceName }
+    );
+    this.persist();
+    return schedule;
+  }
+
+  public deleteScheduledReport(userId: string, scheduleId: string, deviceName?: string) {
+    const user = this.assertPermission(userId, 'view_audit');
+    const list = this.state.scheduledReports || [];
+    const target = list.find((s) => s.id === scheduleId);
+    if (!target) throw new Error('التقرير المجدول غير موجود');
+    this.state.scheduledReports = list.filter((s) => s.id !== scheduleId);
+    this.addAudit(
+      user,
+      'حذف جدولة تقرير',
+      'ScheduledReport',
+      scheduleId,
+      `إزالة التقرير المجدول: ${target.title}`,
+      { deviceName }
+    );
+    this.persist();
+    return { deletedId: scheduleId };
+  }
+
+  public runScheduledReportNow(userId: string, scheduleId: string, deviceName?: string): ScheduledReportConfig {
+    const user = this.assertPermission(userId, 'view_audit');
+    const target = (this.state.scheduledReports || []).find((s) => s.id === scheduleId);
+    if (!target) throw new Error('التقرير المجدول غير موجود');
+    target.lastRunAt = new Date().toISOString();
+    this.state.notifications.unshift({
+      id: uid('ntf'),
+      titleAr: `تقرير مجدول جاهز: ${target.title}`,
+      titleEn: `Scheduled Report Ready: ${target.title}`,
+      messageAr: `تم توليد وإرسال التقرير (${target.title}) إلى ${target.recipient} عبر ${target.deliveryChannel}.`,
+      messageEn: `Generated report (${target.title}) for ${target.recipient}.`,
+      category: 'مالية',
+      targetRoles: ['gm', 'accountant', 'sys_owner'],
+      relatedView: 'reports',
+      isReadBy: [],
+      createdAt: target.lastRunAt,
+    });
+    this.addAudit(
+      user,
+      'تشغيل فوري لتقرير مجدول',
+      'ScheduledReport',
+      target.id,
+      `تم تشغيل التقرير المجدول (${target.title}) وإرساله عبر ${target.deliveryChannel}`,
+      { deviceName }
+    );
+    this.persist();
+    return target;
+  }
+
+  // 22. ZATCA Phase 1/2 TLV QR E-Invoicing & Tax Archive
+  private buildZatcaTlvBase64(
+    sellerName: string,
+    vatNumber: string,
+    timestamp: string,
+    totalWithVat: number,
+    vatAmount: number
+  ): string {
+    const encodeTag = (tag: number, value: string) => {
+      const buf = Buffer.from(value, 'utf-8');
+      return Buffer.concat([Buffer.from([tag, buf.length]), buf]);
+    };
+    return Buffer.concat([
+      encodeTag(1, sellerName),
+      encodeTag(2, vatNumber),
+      encodeTag(3, timestamp),
+      encodeTag(4, totalWithVat.toFixed(2)),
+      encodeTag(5, vatAmount.toFixed(2)),
+    ]).toString('base64');
+  }
+
+  public createZatcaInvoice(
+    userId: string,
+    input: {
+      invoiceType: ZatcaInvoiceRecord['invoiceType'];
+      buyerName: string;
+      buyerVatNumber?: string;
+      propertyId?: string;
+      unitId?: string;
+      relatedPaymentId?: string;
+      subtotal: number;
+      vatRate?: number;
+      notes?: string;
+    },
+    deviceName?: string
+  ): ZatcaInvoiceRecord {
+    const user = this.assertPermission(userId, 'manage_accounting');
+    const subtotal = Number(input.subtotal || 0);
+    if (subtotal <= 0) throw new Error('يجب أن يكون صافي مبلغ الفاتورة أكبر من صفر');
+    if (!input.buyerName?.trim()) throw new Error('يرجى إدخال اسم العميل / المشتري');
+
+    const vatRate = input.vatRate !== undefined ? Number(input.vatRate) : 15;
+    const vatAmount = Math.round(subtotal * (vatRate / 100) * 100) / 100;
+    const totalWithVat = Math.round((subtotal + vatAmount) * 100) / 100;
+    const now = new Date().toISOString();
+
+    if (!this.state.zatcaInvoices) this.state.zatcaInvoices = [];
+    const invNum = `INV-ZATCA-${new Date().getFullYear()}-${pad4(this.state.zatcaInvoices.length + 1)}`;
+    const sellerName = this.state.settings.nameAr;
+    const vatNumber = this.state.settings.vatNumber || '310489211400003';
+
+    const tlvBase64 = this.buildZatcaTlvBase64(sellerName, vatNumber, now, totalWithVat, vatAmount);
+    const invoiceHash = crypto
+      .createHash('sha256')
+      .update(`${invNum}|${vatNumber}|${now}|${totalWithVat.toFixed(2)}|${vatAmount.toFixed(2)}`)
+      .digest('hex');
+
+    const clearanceStatus: ZatcaInvoiceRecord['clearanceStatus'] =
+      this.state.settings.zatcaPhase.includes('الثانية')
+        ? 'تم الربط والتحقق (المرحلة 2)'
+        : 'مؤرشف (المرحلة 1)';
+
+    const record: ZatcaInvoiceRecord = {
+      id: uid('zatca'),
+      invoiceNumber: invNum,
+      invoiceType: input.invoiceType || 'فاتورة ضريبية مبسطة (B2C)',
+      issueDate: now.slice(0, 10),
+      sellerName,
+      vatNumber,
+      buyerName: input.buyerName.trim(),
+      buyerVatNumber: input.buyerVatNumber?.trim() || undefined,
+      propertyId: input.propertyId || undefined,
+      unitId: input.unitId || undefined,
+      relatedPaymentId: input.relatedPaymentId || undefined,
+      subtotal,
+      vatRate,
+      vatAmount,
+      totalWithVat,
+      currency: 'SAR',
+      tlvBase64,
+      invoiceHash,
+      clearanceStatus,
+      notes: input.notes?.trim() || undefined,
+      createdBy: user.nameAr,
+      createdAt: now,
+    };
+
+    this.state.zatcaInvoices.unshift(record);
+
+    // Save automatically to Tax Documents Archive
+    this.state.documents.unshift({
+      id: uid('doc'),
+      title: `فاتورة ضريبية إلكترونية ${record.invoiceNumber} — ${record.buyerName}`,
+      category: 'فواتير',
+      fileName: `${record.invoiceNumber}.json`,
+      fileType: 'application/json',
+      fileSizeKb: 4,
+      relatedType: record.propertyId ? 'عقار' : 'شركة',
+      relatedId: record.propertyId || 'company',
+      version: 1,
+      uploadedBy: user.id,
+      ocrStatus: 'تم الاستخراج آلياً',
+      ocrRawText: `ZATCA TLV: ${tlvBase64}\nSHA256: ${invoiceHash}\nTotal: ${totalWithVat} SAR`,
+      createdAt: now,
+    });
+
+    this.addAudit(
+      user,
+      'إصدار فاتورة إلكترونية ZATCA',
+      'ZatcaInvoice',
+      record.id,
+      `إصدار ${record.invoiceNumber} للعميل ${record.buyerName} بإجمالي ${totalWithVat} ر.س (ضريبة ${vatAmount} ر.س) وأرشفتها ضريبياً`,
+      { propertyId: record.propertyId, newValue: record.invoiceHash.slice(0, 12), deviceName }
+    );
+    this.persist();
+    return record;
   }
 }

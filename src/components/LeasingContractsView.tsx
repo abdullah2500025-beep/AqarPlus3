@@ -32,7 +32,7 @@ import {
   ReminderChannel,
   UnitStatus,
 } from '../types/aqar';
-import { CURRENCY_META, formatDateTime, formatSar } from '../utils/formatters';
+import { formatDateTime, formatSar } from '../utils/formatters';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { CreateTaskQuickButton } from './CreateTaskQuickModal';
 import { PrintViewButton } from './PrintViewButton';
@@ -1084,9 +1084,9 @@ export function LeasingContractsView() {
               {/* Step 3: Financials & Live Installment Schedule Preview */}
               {wizardStep === 3 && (
                 <div className="space-y-3 text-xs">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[11px] text-slate-500 block mb-1">{lang === 'ar' ? 'الإيجار السنوي' : 'Annual Rent'}</label>
+                      <label className="text-[11px] text-slate-500 block mb-1">{lang === 'ar' ? 'الإيجار السنوي (بالريال السعودي)' : 'Annual Rent (SAR)'}</label>
                       <input
                         type="number"
                         required
@@ -1095,20 +1095,6 @@ export function LeasingContractsView() {
                         onChange={(e) => setContractForm({ ...contractForm, annualRent: Number(e.target.value) })}
                         className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num font-bold"
                       />
-                    </div>
-                    <div>
-                      <label className="text-[11px] text-slate-500 block mb-1">{lang === 'ar' ? 'العملة' : 'Currency'}</label>
-                      <select
-                        value={contractForm.currency}
-                        onChange={(e) => setContractForm({ ...contractForm, currency: e.target.value as CurrencyCode })}
-                        className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-                      >
-                        {(Object.keys(CURRENCY_META) as CurrencyCode[]).map((code) => (
-                          <option key={code} value={code}>
-                            {lang === 'ar' ? CURRENCY_META[code].labelAr : CURRENCY_META[code].labelEn}
-                          </option>
-                        ))}
-                      </select>
                     </div>
                     <div>
                       <label className="text-[11px] text-slate-500 block mb-1">{lang === 'ar' ? 'دورية السداد' : 'Frequency'}</label>
@@ -1670,19 +1656,8 @@ export function LeasingContractsView() {
                 value={renewForm.annualRent}
                 onChange={(e) => setRenewForm({ ...renewForm, annualRent: Number(e.target.value) })}
                 className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
-                placeholder="الإيجار السنوي الجديد"
+                placeholder="الإيجار السنوي الجديد (ر.س)"
               />
-              <select
-                value={renewForm.currency}
-                onChange={(e) => setRenewForm({ ...renewForm, currency: e.target.value as CurrencyCode })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                {(Object.keys(CURRENCY_META) as CurrencyCode[]).map((code) => (
-                  <option key={code} value={code}>
-                    {CURRENCY_META[code].labelAr}
-                  </option>
-                ))}
-              </select>
               <select
                 value={renewForm.paymentFrequency}
                 onChange={(e) => setRenewForm({ ...renewForm, paymentFrequency: e.target.value as PaymentFrequency })}

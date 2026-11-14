@@ -1,10 +1,16 @@
-import React, { useState } from 'react';
-import { Printer, RotateCcw, X, CheckCircle2, AlertTriangle, MessageCircle, Download } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Printer, RotateCcw, X, CheckCircle2, AlertTriangle, MessageCircle, Download, QrCode, ShieldCheck } from 'lucide-react';
 import { Payment } from '../types/aqar';
 import { useAqar } from '../context/AqarContext';
 import { formatDateTime, formatHijri, formatSar, numberToArabicWords } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
+import {
+  buildReceiptQrPayloadSigned,
+  buildReceiptQrPayloadSync,
+  generateQrPngDataUrl,
+} from '../utils/qrService';
 import { QrCodeSvg } from './QrCodeSvg';
+import { QrVerifyModal } from './QrVerifyModal';
 
 interface ReceiptModalProps {
   payment: Payment;
@@ -16,14 +22,64 @@ export function ReceiptModal({ payment, onClose }: ReceiptModalProps) {
   const [reverseOpen, setReverseOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [signedQrJson, setSignedQrJson] = useState<string>('');
+
+  const tenant = state?.tenants.find((t) => t.id === payment.tenantId);
+  const property = state?.properties.find((p) => p.id === payment.propertyId);
+  const unit = state?.units.find((u) => u.id === payment.unitId);
+  const contract = state?.contracts.find((c) => c.id === payment.contractId);
+  const receiver = state?.users.find((u) => u.id === payment.receivedBy);
+
+  const fallbackQrJson = useMemo(() => {
+    if (!state) return '';
+    return JSON.stringify(
+      buildReceiptQrPayloadSync({
+        receiptNumber: payment.receiptNumber,
+        amount: payment.amount,
+        tenantName: tenant?.nameAr || '—',
+        propertyName: property?.nameAr || '—',
+        unitNumber: unit?.unitNumber || '—',
+        date: payment.createdAt,
+        companyName: state.settings.nameAr,
+      })
+    );
+  }, [state, payment, tenant?.nameAr, property?.nameAr, unit?.unitNumber]);
+
+  useEffect(() => {
+    if (!state) return;
+    let active = true;
+    buildReceiptQrPayloadSigned({
+      receiptNumber: payment.receiptNumber,
+      amount: payment.amount,
+      tenantName: tenant?.nameAr || '—',
+      propertyName: property?.nameAr || '—',
+      unitNumber: unit?.unitNumber || '—',
+      date: payment.createdAt,
+      companyName: state.settings.nameAr,
+    }).then((payload) => {
+      if (active) setSignedQrJson(JSON.stringify(payload));
+    });
+    return () => {
+      active = false;
+    };
+  }, [state, payment, tenant?.nameAr, property?.nameAr, unit?.unitNumber]);
 
   if (!state) return null;
 
-  const tenant = state.tenants.find((t) => t.id === payment.tenantId);
-  const property = state.properties.find((p) => p.id === payment.propertyId);
-  const unit = state.units.find((u) => u.id === payment.unitId);
-  const contract = state.contracts.find((c) => c.id === payment.contractId);
-  const receiver = state.users.find((u) => u.id === payment.receivedBy);
+  const qrPayloadString = signedQrJson || fallbackQrJson;
+
+  const handleDownloadQrPng = async () => {
+    triggerHaptic('light');
+    const url = await generateQrPngDataUrl(qrPayloadString, 320);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `QR-${payment.receiptNumber}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    pushToast('success', lang === 'ar' ? `تم تنزيل رمز QR بصيغة PNG للسند ${payment.receiptNumber}` : 'QR PNG downloaded');
+  };
 
   const contractRemaining = state.installments
     .filter((i) => i.contractId === payment.contractId && i.status !== 'ملغاة')
@@ -169,7 +225,27 @@ export function ReceiptModal({ payment, onClose }: ReceiptModalProps) {
                 )}
               </div>
             </div>
-            <QrCodeSvg value={`AQARPLUS|${payment.receiptNumber}|${payment.amount}|${payment.createdAt}`} size={80} />
+            <div className="flex flex-col items-center gap-1.5 shrink-0">
+              <QrCodeSvg value={qrPayloadString} size={92} />
+              <div className="flex items-center gap-1.5 no-print">
+                <button
+                  type="button"
+                  onClick={() => setVerifyOpen(true)}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold bg-[#26478D]/10 dark:bg-[#26478D]/30 text-[#26478D] dark:text-blue-300 hover:bg-[#26478D]/20 cursor-pointer whitespace-nowrap"
+                >
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>{lang === 'ar' ? 'تحقق QR' : 'Verify QR'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadQrPng}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold border border-slate-200 dark:border-white/15 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer whitespace-nowrap"
+                >
+                  <QrCode className="w-3 h-3" />
+                  <span>PNG</span>
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Core Amount Box */}
@@ -319,6 +395,8 @@ export function ReceiptModal({ payment, onClose }: ReceiptModalProps) {
           )}
         </div>
       </div>
+
+      <QrVerifyModal open={verifyOpen} initialPayload={qrPayloadString} onClose={() => setVerifyOpen(false)} />
     </div>
   );
 }

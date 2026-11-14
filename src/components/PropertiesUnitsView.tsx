@@ -24,8 +24,8 @@ import {
   Clock,
 } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
-import { OcrExtractedData, Property, PropertyOwnershipMode, PropertyType, Unit, UnitStatus, UnitType } from '../types/aqar';
-import { formatSar } from '../utils/formatters';
+import { CurrencyCode, MeterReading, OcrExtractedData, Property, PropertyOwnershipMode, PropertyType, Unit, UnitStatus, UnitType } from '../types/aqar';
+import { CURRENCY_META, formatCurrency, formatSar } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
 import { QrCodeSvg } from './QrCodeSvg';
 import { PrintViewButton } from './PrintViewButton';
@@ -101,17 +101,35 @@ function UnitStatusIcon({ status }: { status: UnitStatus }) {
 
 export function PropertiesUnitsView() {
   const { state, currentUser, lang, hasPermission, mutate, pushToast, startLeasingWizardForUnit, setActiveNav } = useAqar();
+  const [activeTab, setActiveTab] = useState<'portfolio' | 'meters'>('portfolio');
   const [submittingProp, setSubmittingProp] = useState(false);
   const [submittingUnit, setSubmittingUnit] = useState(false);
+  const [submittingMeter, setSubmittingMeter] = useState(false);
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  const [meterSearch, setMeterSearch] = useState('');
+  const [meterTypeFilter, setMeterTypeFilter] = useState<'all' | 'كهرباء' | 'مياه'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null);
   const [showAddProp, setShowAddProp] = useState(false);
   const [showAddUnit, setShowAddUnit] = useState(false);
+  const [showAddMeterReading, setShowAddMeterReading] = useState(false);
   const [showAdvancedProp, setShowAdvancedProp] = useState(false);
   const [showUnitTechDetails, setShowUnitTechDetails] = useState(false);
+  const [meterForm, setMeterForm] = useState({
+    propertyId: '',
+    unitId: '',
+    meterType: 'كهرباء' as 'كهرباء' | 'مياه',
+    meterNumber: '',
+    previousReading: 0,
+    currentReading: 0,
+    billAmount: 0,
+    currency: 'SAR' as CurrencyCode,
+    billingPeriod: '2026-11',
+    paidBy: 'المستأجر' as 'المستأجر' | 'المالك' | 'الشركة',
+    notes: '',
+  });
   const [nextStepPrompt, setNextStepPrompt] = useState<
     | { type: 'add-unit'; propertyId: string; propertyName: string }
     | { type: 'lease-unit'; unit: Unit; unitNumber: string }
@@ -191,6 +209,91 @@ export function PropertiesUnitsView() {
       return true;
     });
   }, [state, selectedPropertyId, statusFilter, search]);
+
+  const meterDirectory = useMemo(() => {
+    if (!state) return [];
+    const items: {
+      id: string;
+      propertyId: string;
+      propertyName: string;
+      unitId?: string;
+      unitLabel: string;
+      meterType: 'كهرباء' | 'مياه';
+      meterNumber: string;
+      latestReading?: MeterReading;
+    }[] = [];
+
+    const allReadings = state.meterReadings || [];
+
+    for (const p of state.properties) {
+      if (p.electricityMeterMain) {
+        const latest = allReadings.find((r) => r.propertyId === p.id && !r.unitId && r.meterType === 'كهرباء');
+        items.push({
+          id: `main-e-${p.id}`,
+          propertyId: p.id,
+          propertyName: lang === 'ar' ? p.nameAr : p.nameEn,
+          unitLabel: lang === 'ar' ? 'العداد الرئيسي للعقار' : 'Property Main Meter',
+          meterType: 'كهرباء',
+          meterNumber: p.electricityMeterMain,
+          latestReading: latest,
+        });
+      }
+      if (p.waterMeterMain) {
+        const latest = allReadings.find((r) => r.propertyId === p.id && !r.unitId && r.meterType === 'مياه');
+        items.push({
+          id: `main-w-${p.id}`,
+          propertyId: p.id,
+          propertyName: lang === 'ar' ? p.nameAr : p.nameEn,
+          unitLabel: lang === 'ar' ? 'العداد الرئيسي للعقار' : 'Property Main Meter',
+          meterType: 'مياه',
+          meterNumber: p.waterMeterMain,
+          latestReading: latest,
+        });
+      }
+    }
+
+    for (const u of state.units) {
+      const prop = state.properties.find((p) => p.id === u.propertyId);
+      const propName = prop ? (lang === 'ar' ? prop.nameAr : prop.nameEn) : '';
+      if (u.electricityMeter) {
+        const latest = allReadings.find((r) => r.unitId === u.id && r.meterType === 'كهرباء');
+        items.push({
+          id: `unit-e-${u.id}`,
+          propertyId: u.propertyId,
+          propertyName: propName,
+          unitId: u.id,
+          unitLabel: `${u.unitType} ${u.unitNumber}`,
+          meterType: 'كهرباء',
+          meterNumber: u.electricityMeter,
+          latestReading: latest,
+        });
+      }
+      if (u.waterMeter) {
+        const latest = allReadings.find((r) => r.unitId === u.id && r.meterType === 'مياه');
+        items.push({
+          id: `unit-w-${u.id}`,
+          propertyId: u.propertyId,
+          propertyName: propName,
+          unitId: u.id,
+          unitLabel: `${u.unitType} ${u.unitNumber}`,
+          meterType: 'مياه',
+          meterNumber: u.waterMeter,
+          latestReading: latest,
+        });
+      }
+    }
+
+    const q = meterSearch.trim().toLowerCase();
+    return items.filter((m) => {
+      if (meterTypeFilter !== 'all' && m.meterType !== meterTypeFilter) return false;
+      if (!q) return true;
+      return (
+        m.meterNumber.toLowerCase().includes(q) ||
+        m.propertyName.toLowerCase().includes(q) ||
+        m.unitLabel.toLowerCase().includes(q)
+      );
+    });
+  }, [state, lang, meterSearch, meterTypeFilter]);
 
   if (!state) return null;
 
@@ -356,44 +459,390 @@ export function PropertiesUnitsView() {
     }
   };
 
+  const openMeterModalFor = (opts: {
+    propertyId?: string;
+    unitId?: string;
+    meterType?: 'كهرباء' | 'مياه';
+    meterNumber?: string;
+  }) => {
+    const pid = opts.propertyId || state.properties[0]?.id || '';
+    const mType = opts.meterType || 'كهرباء';
+    const matchingUnit = opts.unitId ? state.units.find((u) => u.id === opts.unitId) : undefined;
+    const matchingProp = state.properties.find((p) => p.id === pid);
+    const resolvedMeterNum =
+      opts.meterNumber ||
+      (matchingUnit
+        ? mType === 'كهرباء'
+          ? matchingUnit.electricityMeter
+          : matchingUnit.waterMeter
+        : mType === 'كهرباء'
+        ? matchingProp?.electricityMeterMain
+        : matchingProp?.waterMeterMain) ||
+      '';
+    const prevRec = (state.meterReadings || []).find(
+      (r) =>
+        r.propertyId === pid &&
+        (opts.unitId ? r.unitId === opts.unitId : !r.unitId) &&
+        r.meterType === mType
+    );
+    const prevVal = prevRec?.currentReading ?? 0;
+    setMeterForm({
+      propertyId: pid,
+      unitId: opts.unitId || '',
+      meterType: mType,
+      meterNumber: resolvedMeterNum,
+      previousReading: prevVal,
+      currentReading: prevVal,
+      billAmount: 0,
+      currency: prevRec?.currency || 'SAR',
+      billingPeriod: '2026-11',
+      paidBy: 'المستأجر',
+      notes: '',
+    });
+    setShowAddMeterReading(true);
+  };
+
+  const handleCreateMeterReading = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submittingMeter || !meterForm.propertyId || !meterForm.meterNumber.trim()) return;
+    setSubmittingMeter(true);
+    triggerHaptic('medium');
+    try {
+      const res = await mutate<{ reading?: MeterReading }>(
+        'POST',
+        '/api/meters/readings',
+        {
+          ...meterForm,
+          unitId: meterForm.unitId || undefined,
+        },
+        { offlineDescAr: `تسجيل قراءة عداد ${meterForm.meterNumber}` }
+      );
+      if (res) {
+        triggerHaptic('success');
+        pushToast(
+          'success',
+          lang === 'ar'
+            ? `تم تسجيل قراءة العداد (${CURRENCY_META[meterForm.currency].labelAr}) بنجاح`
+            : 'Meter reading & bill recorded'
+        );
+        setShowAddMeterReading(false);
+      }
+    } finally {
+      setSubmittingMeter(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Property Portfolio Strip */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold">{lang === 'ar' ? 'المحفظة العقارية والمباني' : 'Property Portfolio'}</h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {lang === 'ar'
-              ? `${state.properties.length} عقارات مسجلة · ${state.units.length} وحدة إجمالاً`
-              : `${state.properties.length} properties · ${state.units.length} total units`}
-          </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <h2 className="text-lg font-bold">
+              {activeTab === 'meters'
+                ? lang === 'ar'
+                  ? 'شاشة العدادات (الكهرباء والمياه)'
+                  : 'Utility Meters & Bills'
+                : lang === 'ar'
+                ? 'المحفظة العقارية والمباني'
+                : 'Property Portfolio'}
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {activeTab === 'meters'
+                ? lang === 'ar'
+                  ? `${meterDirectory.length} عداداً مسجلاً · ${(state.meterReadings || []).length} قراءة وفاتورة`
+                  : `${meterDirectory.length} meters · ${(state.meterReadings || []).length} readings`
+                : lang === 'ar'
+                ? `${state.properties.length} عقارات مسجلة · ${state.units.length} وحدة إجمالاً`
+                : `${state.properties.length} properties · ${state.units.length} total units`}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-200/70 dark:bg-white/[0.06] border border-slate-200 dark:border-white/10 text-xs">
+            <button
+              type="button"
+              onClick={() => setActiveTab('portfolio')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-semibold cursor-pointer transition-colors ${
+                activeTab === 'portfolio'
+                  ? 'bg-white dark:bg-[#26478D] text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>{lang === 'ar' ? 'العقارات والوحدات' : 'Properties & Units'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('meters')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-semibold cursor-pointer transition-colors ${
+                activeTab === 'meters'
+                  ? 'bg-white dark:bg-[#26478D] text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>{lang === 'ar' ? 'العدادات (كهرباء ومياه)' : 'Utility Meters'}</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 no-print">
           <PrintViewButton />
-          {hasPermission('manage_properties') && (
-            <>
+          {activeTab === 'meters' ? (
+            hasPermission('manage_properties') && (
               <button
-                onClick={() => setShowAddProp(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>{lang === 'ar' ? 'عقار جديد' : 'Add Property'}</span>
-              </button>
-              <button
-                onClick={() => {
-                  setUnitForm((f) => ({ ...f, propertyId: state.properties[0]?.id || '' }));
-                  setShowAddUnit(true);
-                }}
+                type="button"
+                onClick={() => openMeterModalFor({ propertyId: state.properties[0]?.id })}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>{lang === 'ar' ? 'وحدة جديدة' : 'Add Unit'}</span>
+                <span>{lang === 'ar' ? 'تسجيل قراءة عداد وفاتورة' : 'Record Meter Reading'}</span>
               </button>
-            </>
+            )
+          ) : (
+            hasPermission('manage_properties') && (
+              <>
+                <button
+                  onClick={() => setShowAddProp(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'عقار جديد' : 'Add Property'}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setUnitForm((f) => ({ ...f, propertyId: state.properties[0]?.id || '' }));
+                    setShowAddUnit(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'وحدة جديدة' : 'Add Unit'}</span>
+                </button>
+              </>
+            )
           )}
         </div>
       </div>
+
+      {activeTab === 'meters' && (
+        <div className="space-y-6">
+          {/* Exclusive Meter Currency Notice */}
+          <div className="p-4 rounded-2xl border border-[#26478D]/30 bg-[#26478D]/[0.06] dark:bg-[#26478D]/20 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-[#26478D] text-white flex items-center justify-center shrink-0">
+                <Zap className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="font-bold text-[#26478D] dark:text-blue-300">
+                  {lang === 'ar'
+                    ? 'اختيار نوع العملة حصرياً لفواتير العدادات (الكهرباء والمياه)'
+                    : 'Exclusive Currency Selection for Utility Meter Bills'}
+                </div>
+                <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
+                  {lang === 'ar'
+                    ? 'يمكن اختيار عملة دفع فاتورة العداد هنا فقط، بينما تعتمد كافة المعاملات والتقارير الأخرى الريال السعودي (SAR) حصراً.'
+                    : 'Bill currency selection is exclusively available here for meter bills; all other app modules strictly use SAR.'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 4 Meters KPIs */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+            <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
+              <div className="text-[11px] text-slate-500">إجمالي العدادات المسجلة</div>
+              <div className="text-xl font-bold font-mono-num mt-1">{meterDirectory.length}</div>
+            </div>
+            <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
+              <div className="text-[11px] text-slate-500">القراءات والفواتير المسجلة</div>
+              <div className="text-xl font-bold font-mono-num text-[#26478D] dark:text-blue-400 mt-1">
+                {(state.meterReadings || []).length}
+              </div>
+            </div>
+            <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
+              <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                <span>قراءات الكهرباء</span>
+              </div>
+              <div className="text-xl font-bold font-mono-num text-amber-600 dark:text-amber-400 mt-1">
+                {(state.meterReadings || []).filter((r) => r.meterType === 'كهرباء').length}
+              </div>
+            </div>
+            <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
+              <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                <Droplets className="w-3.5 h-3.5 text-cyan-500" />
+                <span>قراءات المياه</span>
+              </div>
+              <div className="text-xl font-bold font-mono-num text-cyan-600 dark:text-cyan-400 mt-1">
+                {(state.meterReadings || []).filter((r) => r.meterType === 'مياه').length}
+              </div>
+            </div>
+          </div>
+
+          {/* Search & Type Filter */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
+            <div className="relative flex-1 max-w-sm min-w-[200px]">
+              <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3 pointer-events-none" />
+              <input
+                type="search"
+                value={meterSearch}
+                onChange={(e) => setMeterSearch(e.target.value)}
+                placeholder={lang === 'ar' ? 'بحث برقم العداد أو العقار أو الوحدة...' : 'Search meter number, property, unit...'}
+                className="w-full min-h-[40px] ps-9 pe-3 text-xs rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+              />
+            </div>
+
+            <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-white/[0.06] text-xs">
+              {(['all', 'كهرباء', 'مياه'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setMeterTypeFilter(t)}
+                  className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer ${
+                    meterTypeFilter === t
+                      ? 'bg-white dark:bg-[#26478D] text-slate-900 dark:text-white shadow-sm'
+                      : 'text-slate-500 dark:text-slate-300'
+                  }`}
+                >
+                  {t === 'all' ? 'جميع العدادات' : t === 'كهرباء' ? 'كهرباء' : 'مياه'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Registered Meters Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {meterDirectory.map((m) => (
+              <div
+                key={m.id}
+                className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface flex flex-col justify-between gap-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs font-bold">
+                      {m.meterType === 'كهرباء' ? (
+                        <Zap className="w-4 h-4 text-amber-500 shrink-0" />
+                      ) : (
+                        <Droplets className="w-4 h-4 text-cyan-500 shrink-0" />
+                      )}
+                      <span>عداد {m.meterType}</span>
+                    </div>
+                    <div className="font-mono-num text-sm font-bold mt-1">{m.meterNumber}</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">
+                      {m.propertyName} · {m.unitLabel}
+                    </div>
+                  </div>
+                  {m.latestReading && (
+                    <div className="text-end text-[11px]">
+                      <div className="text-slate-500">آخر فاتورة ({m.latestReading.billingPeriod})</div>
+                      <div className="font-mono-num font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(m.latestReading.billAmount, m.latestReading.currency, lang)}
+                      </div>
+                      <div className="font-mono-num text-[10px] text-slate-400">
+                        العملة: {m.latestReading.currency}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {hasPermission('manage_properties') && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openMeterModalFor({
+                        propertyId: m.propertyId,
+                        unitId: m.unitId,
+                        meterType: m.meterType,
+                        meterNumber: m.meterNumber,
+                      })
+                    }
+                    className="w-full min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-semibold border border-[#26478D]/30 bg-[#26478D]/10 text-[#26478D] dark:text-blue-300 hover:bg-[#26478D]/20 cursor-pointer"
+                  >
+                    {lang === 'ar' ? 'تسجيل قراءة وفاتورة' : 'Record Reading & Bill'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Historical Meter Readings Table */}
+          <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-x-auto">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-white/10 flex items-center justify-between">
+              <h3 className="text-sm font-bold">سجل قراءات وفواتير العدادات</h3>
+              <span className="text-[11px] text-slate-500 font-mono-num">
+                {(state.meterReadings || []).length} سجل
+              </span>
+            </div>
+            <table className="w-full text-start text-xs">
+              <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">
+                <tr>
+                  <th className="py-3 px-4 text-start font-medium">رقم السجل</th>
+                  <th className="py-3 px-4 text-start font-medium">العقار / الوحدة</th>
+                  <th className="py-3 px-4 text-start font-medium">العداد</th>
+                  <th className="py-3 px-4 text-start font-medium">القراءة والاستهلاك</th>
+                  <th className="py-3 px-4 text-start font-medium">قيمة الفاتورة والعملة</th>
+                  <th className="py-3 px-4 text-start font-medium">جهة السداد</th>
+                  <th className="py-3 px-4 text-start font-medium">الفترة</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                {(state.meterReadings || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-slate-500">
+                      لا توجد قراءات مسجلة بعد
+                    </td>
+                  </tr>
+                ) : (
+                  (state.meterReadings || []).map((r) => {
+                    const prop = state.properties.find((p) => p.id === r.propertyId);
+                    const unit = r.unitId ? state.units.find((u) => u.id === r.unitId) : undefined;
+                    return (
+                      <tr key={r.id}>
+                        <td className="py-3 px-4 font-mono-num font-bold">{r.readingNumber}</td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium">{prop?.nameAr || '—'}</div>
+                          <div className="text-[11px] text-slate-500">
+                            {unit ? `${unit.unitType} ${unit.unitNumber}` : 'العداد الرئيسي'}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="inline-flex items-center gap-1 font-medium">
+                            {r.meterType === 'كهرباء' ? (
+                              <Zap className="w-3.5 h-3.5 text-amber-500" />
+                            ) : (
+                              <Droplets className="w-3.5 h-3.5 text-cyan-500" />
+                            )}
+                            <span>{r.meterType}</span>
+                          </div>
+                          <div className="text-[11px] font-mono-num text-slate-500">{r.meterNumber}</div>
+                        </td>
+                        <td className="py-3 px-4 font-mono-num">
+                          <div>
+                            {r.previousReading} → {r.currentReading}
+                          </div>
+                          <div className="text-[11px] text-slate-500">الاستهلاك: {r.consumption}</div>
+                        </td>
+                        <td className="py-3 px-4 font-mono-num font-bold text-emerald-600 dark:text-emerald-400">
+                          <div>{formatCurrency(r.billAmount, r.currency, lang)}</div>
+                          <div className="text-[10px] text-slate-500">
+                            {CURRENCY_META[r.currency]?.labelAr || r.currency}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">{r.paidBy || 'المستأجر'}</td>
+                        <td className="py-3 px-4 font-mono-num">{r.billingPeriod}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'portfolio' && (
+        <>
 
       {/* Sequential Logical Flow Next-Step Banner */}
       {nextStepPrompt && (
@@ -753,6 +1202,8 @@ export function PropertiesUnitsView() {
           </table>
         </div>
       )}
+        </>
+      )}
 
       {/* Unit Full Dossier Drawer with Hero Scale Transition */}
       {activeSelectedUnit && (
@@ -946,19 +1397,55 @@ export function PropertiesUnitsView() {
               {showUnitTechDetails && (
                 <div className="p-4 space-y-4">
                   <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div className="p-3 rounded-xl border border-slate-200 dark:border-white/10">
-                      <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
-                        <Zap className="w-3.5 h-3.5" />
-                        <span>عداد الكهرباء</span>
+                    <div className="p-3 rounded-xl border border-slate-200 dark:border-white/10 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                          <Zap className="w-3.5 h-3.5" />
+                          <span>عداد الكهرباء</span>
+                        </div>
+                        <div className="font-mono-num font-semibold mt-1">{activeSelectedUnit.electricityMeter || '—'}</div>
                       </div>
-                      <div className="font-mono-num font-semibold mt-1">{activeSelectedUnit.electricityMeter || '—'}</div>
+                      {activeSelectedUnit.electricityMeter && hasPermission('manage_properties') && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openMeterModalFor({
+                              propertyId: activeSelectedUnit.propertyId,
+                              unitId: activeSelectedUnit.id,
+                              meterType: 'كهرباء',
+                              meterNumber: activeSelectedUnit.electricityMeter,
+                            })
+                          }
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-[#26478D]/10 text-[#26478D] dark:text-blue-300 hover:bg-[#26478D]/20 cursor-pointer shrink-0"
+                        >
+                          تسجيل قراءة
+                        </button>
+                      )}
                     </div>
-                    <div className="p-3 rounded-xl border border-slate-200 dark:border-white/10">
-                      <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
-                        <Droplets className="w-3.5 h-3.5" />
-                        <span>عداد المياه</span>
+                    <div className="p-3 rounded-xl border border-slate-200 dark:border-white/10 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                          <Droplets className="w-3.5 h-3.5" />
+                          <span>عداد المياه</span>
+                        </div>
+                        <div className="font-mono-num font-semibold mt-1">{activeSelectedUnit.waterMeter || '—'}</div>
                       </div>
-                      <div className="font-mono-num font-semibold mt-1">{activeSelectedUnit.waterMeter || '—'}</div>
+                      {activeSelectedUnit.waterMeter && hasPermission('manage_properties') && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openMeterModalFor({
+                              propertyId: activeSelectedUnit.propertyId,
+                              unitId: activeSelectedUnit.id,
+                              meterType: 'مياه',
+                              meterNumber: activeSelectedUnit.waterMeter,
+                            })
+                          }
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-[#26478D]/10 text-[#26478D] dark:text-blue-300 hover:bg-[#26478D]/20 cursor-pointer shrink-0"
+                        >
+                          تسجيل قراءة
+                        </button>
+                      )}
                     </div>
                     <div className="p-3 rounded-xl border border-slate-200 dark:border-white/10">
                       <div className="flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
@@ -1259,19 +1746,262 @@ export function PropertiesUnitsView() {
         </div>
       )}
 
+      {/* Record Utility Meter Reading Modal (Exclusive Currency Selector) */}
+      {showAddMeterReading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 overflow-y-auto">
+          <form
+            onSubmit={handleCreateMeterReading}
+            className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-4 my-auto"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold">
+                  {lang === 'ar' ? 'تسجيل قراءة عداد وفاتورة' : 'Record Meter Reading & Bill'}
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {lang === 'ar'
+                    ? 'يمكن اختيار نوع العملة لدفع فاتورة العداد هنا فقط'
+                    : 'Bill currency selection is exclusive to utility meters'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddMeterReading(false)}
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">العقار</label>
+                <select
+                  value={meterForm.propertyId}
+                  onChange={(e) => {
+                    const pid = e.target.value;
+                    const prop = state.properties.find((p) => p.id === pid);
+                    setMeterForm((f) => ({
+                      ...f,
+                      propertyId: pid,
+                      unitId: '',
+                      meterNumber:
+                        (f.meterType === 'كهرباء' ? prop?.electricityMeterMain : prop?.waterMeterMain) ||
+                        f.meterNumber,
+                    }));
+                  }}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  {state.properties.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nameAr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">الوحدة (اختياري)</label>
+                <select
+                  value={meterForm.unitId}
+                  onChange={(e) => {
+                    const uid = e.target.value;
+                    const u = state.units.find((x) => x.id === uid);
+                    const prop = state.properties.find((p) => p.id === meterForm.propertyId);
+                    setMeterForm((f) => ({
+                      ...f,
+                      unitId: uid,
+                      meterNumber: u
+                        ? (f.meterType === 'كهرباء' ? u.electricityMeter : u.waterMeter) || f.meterNumber
+                        : (f.meterType === 'كهرباء' ? prop?.electricityMeterMain : prop?.waterMeterMain) ||
+                          f.meterNumber,
+                    }));
+                  }}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  <option value="">العداد الرئيسي للعقار</option>
+                  {state.units
+                    .filter((u) => u.propertyId === meterForm.propertyId)
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.unitType} {u.unitNumber}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">نوع العداد</label>
+                <select
+                  value={meterForm.meterType}
+                  onChange={(e) => {
+                    const mType = e.target.value as 'كهرباء' | 'مياه';
+                    const u = state.units.find((x) => x.id === meterForm.unitId);
+                    const prop = state.properties.find((p) => p.id === meterForm.propertyId);
+                    setMeterForm((f) => ({
+                      ...f,
+                      meterType: mType,
+                      meterNumber: u
+                        ? (mType === 'كهرباء' ? u.electricityMeter : u.waterMeter) || f.meterNumber
+                        : (mType === 'كهرباء' ? prop?.electricityMeterMain : prop?.waterMeterMain) ||
+                          f.meterNumber,
+                    }));
+                  }}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  <option value="كهرباء">كهرباء</option>
+                  <option value="مياه">مياه</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">رقم العداد</label>
+                <input
+                  required
+                  value={meterForm.meterNumber}
+                  onChange={(e) => setMeterForm({ ...meterForm, meterNumber: e.target.value })}
+                  placeholder="مثال: E-441011"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">القراءة السابقة</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={meterForm.previousReading}
+                  onChange={(e) => setMeterForm({ ...meterForm, previousReading: Number(e.target.value) })}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">القراءة الحالية</label>
+                <input
+                  type="number"
+                  required
+                  min={meterForm.previousReading}
+                  value={meterForm.currentReading}
+                  onChange={(e) => setMeterForm({ ...meterForm, currentReading: Number(e.target.value) })}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">قيمة الفاتورة</label>
+                <input
+                  type="number"
+                  required
+                  min={0}
+                  step="0.01"
+                  value={meterForm.billAmount}
+                  onChange={(e) => setMeterForm({ ...meterForm, billAmount: Number(e.target.value) })}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">
+                  نوع العملة (خاص بفاتورة العداد فقط)
+                </label>
+                <select
+                  value={meterForm.currency}
+                  onChange={(e) => setMeterForm({ ...meterForm, currency: e.target.value as CurrencyCode })}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-[#26478D]/40 bg-white dark:bg-[#0A0E1A] font-semibold"
+                >
+                  {(Object.keys(CURRENCY_META) as CurrencyCode[]).map((code) => (
+                    <option key={code} value={code}>
+                      {lang === 'ar' ? CURRENCY_META[code].labelAr : CURRENCY_META[code].labelEn}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">الفترة الشهرية</label>
+                <input
+                  required
+                  value={meterForm.billingPeriod}
+                  onChange={(e) => setMeterForm({ ...meterForm, billingPeriod: e.target.value })}
+                  placeholder="2026-11"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] text-slate-500 block mb-1">جهة السداد</label>
+                <select
+                  value={meterForm.paidBy}
+                  onChange={(e) => setMeterForm({ ...meterForm, paidBy: e.target.value as 'المستأجر' | 'المالك' | 'الشركة' })}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  <option value="المستأجر">المستأجر</option>
+                  <option value="المالك">المالك</option>
+                  <option value="الشركة">الشركة</option>
+                </select>
+              </div>
+
+              <input
+                placeholder="ملاحظات القراءة (اختياري)"
+                value={meterForm.notes}
+                onChange={(e) => setMeterForm({ ...meterForm, notes: e.target.value })}
+                className="sm:col-span-2 min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+              />
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/10 flex items-center justify-between text-xs font-mono-num">
+              <span>صافي الاستهلاك: {Math.max(0, meterForm.currentReading - meterForm.previousReading)}</span>
+              <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                {formatCurrency(meterForm.billAmount, meterForm.currency, lang)}
+              </span>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAddMeterReading(false)}
+                className="min-h-[42px] px-4 py-2 text-xs rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={submittingMeter}
+                className="min-h-[42px] px-5 py-2 text-xs font-semibold rounded-xl bg-[#26478D] text-white disabled:opacity-50 cursor-pointer"
+              >
+                {submittingMeter ? 'جاري الحفظ...' : 'حفظ القراءة والفاتورة'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Mobile Thumb-Zone FAB */}
       {hasPermission('manage_properties') && (
         <button
           type="button"
           onClick={() => {
             triggerHaptic('medium');
-            setUnitForm((f) => ({ ...f, propertyId: state.properties[0]?.id || '' }));
-            setShowAddUnit(true);
+            if (activeTab === 'meters') {
+              openMeterModalFor({ propertyId: state.properties[0]?.id });
+            } else {
+              setUnitForm((f) => ({ ...f, propertyId: state.properties[0]?.id || '' }));
+              setShowAddUnit(true);
+            }
           }}
           className="lg:hidden fixed bottom-[4.4rem] end-4 z-30 min-h-[48px] px-4 rounded-2xl bg-[#26478D] text-white shadow-xl shadow-[#26478D]/35 inline-flex items-center gap-2 text-xs font-bold cursor-pointer active:scale-95 transition-transform no-print"
         >
           <Plus className="w-4 h-4" />
-          <span>{lang === 'ar' ? 'وحدة جديدة' : 'Add Unit'}</span>
+          <span>
+            {activeTab === 'meters'
+              ? lang === 'ar'
+                ? 'قراءة عداد'
+                : 'Meter Reading'
+              : lang === 'ar'
+              ? 'وحدة جديدة'
+              : 'Add Unit'}
+          </span>
         </button>
       )}
     </div>

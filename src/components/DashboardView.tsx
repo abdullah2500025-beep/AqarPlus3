@@ -13,6 +13,7 @@ import {
   CalendarCheck,
   ListTodo,
   Plus,
+  Send,
 } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
 import { formatCurrency, formatDateTime, formatGregorian, formatHijri } from '../utils/formatters';
@@ -41,6 +42,7 @@ export function DashboardView() {
     baseCurrency,
     convertToBase,
     formatInCurrency,
+    openLeadsHub,
   } = useAqar();
   const [selectedReceipt, setSelectedReceipt] = useState<Payment | null>(null);
   const [alertsOverlayOpen, setAlertsOverlayOpen] = useState(false);
@@ -171,6 +173,7 @@ export function DashboardView() {
   const contractAlertCount = activeAlerts.filter((a) => a.category === 'contracts').length;
   const maintAlertCount = activeAlerts.filter((a) => a.category === 'maintenance').length;
   const criticalCount = activeAlerts.filter((a) => a.severity === 'critical').length;
+  const pendingEscalationsCount = (state?.leadEscalations || []).filter((e) => e.status === 'بانتظار الموافقة').length;
 
   const openAlerts = (cat: AlertCategory = 'all') => {
     setAlertsCategory(cat);
@@ -237,6 +240,27 @@ export function DashboardView() {
               <span>{lang === 'ar' ? 'بلاغات الصيانة' : 'Maintenance'}</span>
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => openLeadsHub()}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold border border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>
+              {currentUser?.role === 'owner'
+                ? lang === 'ar'
+                  ? 'طلبات اعتماد المهتمين'
+                  : 'Lead Approvals'
+                : lang === 'ar'
+                ? 'إرسال بيانات مهتم للمالك/المسؤول'
+                : 'Escalate Lead to Owner'}
+            </span>
+            {pendingEscalationsCount > 0 && (
+              <span className="font-mono-num font-bold text-amber-600 dark:text-amber-300">
+                ({pendingEscalationsCount})
+              </span>
+            )}
+          </button>
         </div>
       </div>
 

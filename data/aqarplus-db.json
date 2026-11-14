@@ -218,11 +218,11 @@
       "approvalLimitSar": 500000,
       "active": true,
       "deviceName": "Windows Desktop · المكتب الرئيسي",
-      "lastActiveAt": "2026-11-14T19:49:11.096Z",
+      "lastActiveAt": "2026-11-14T22:51:10.954Z",
       "statusState": "متصل",
       "specialty": "الإشراف العام واعتماد المصروفات",
       "managerRating": 5,
-      "lastActivitySummary": "تنظيف ذاكرة التخزين المؤقتة",
+      "lastActivitySummary": "تحديث إعدادات المنشأة والعملة الأساسية (SAR)",
       "security": {
         "twoFactorEnabled": true,
         "biometricEnabled": true,
@@ -400,7 +400,7 @@
       "approvalLimitSar": 1000000,
       "active": true,
       "deviceName": "MacBook Pro M3 · الإدارة العليا",
-      "lastActiveAt": "2026-11-14T10:15:00.000Z",
+      "lastActiveAt": "2026-11-14T23:05:42.919Z",
       "statusState": "متصل",
       "specialty": "الحوكمة والأمن والنسخ الاحتياطي",
       "managerRating": 5,
@@ -641,10 +641,23 @@
       "nameAr": "مؤسسة نسيم للتكييف والتبريد",
       "nameEn": "Naseem HVAC Services",
       "crNumber": "1010928371",
+      "vatNumber": "310884422100003",
       "category": "تكييف وتبريد",
+      "city": "الرياض",
+      "nationalAddress": "RYDA8821 · حي الياسمين",
+      "iban": "SA1910000041200009911220",
+      "contactPerson": "م. عبدالرحمن الشمري",
       "phone": "0508819201",
       "email": "orders@naseem-hvac.sa",
       "rating": 4.8,
+      "ratingBreakdown": {
+        "quality": 4.9,
+        "punctuality": 4.8,
+        "pricing": 4.6,
+        "cooperation": 4.9
+      },
+      "avgExecutionDays": 1.5,
+      "complaintsCount": 0,
       "active": true
     },
     {
@@ -652,10 +665,23 @@
       "nameAr": "شركة ركائز السباكة والكهرباء",
       "nameEn": "Rakaiz MEP Contracting",
       "crNumber": "1010445566",
+      "vatNumber": "310772233400003",
       "category": "سباكة وكهرباء",
+      "city": "الرياض",
+      "nationalAddress": "RYDM4410 · حي الملقا",
+      "iban": "SA4480000123608010556677",
+      "contactPerson": "أحمد بن صالح الزهراني",
       "phone": "0553312299",
       "email": "billing@rakaiz.sa",
       "rating": 4.5,
+      "ratingBreakdown": {
+        "quality": 4.7,
+        "punctuality": 4.3,
+        "pricing": 4.5,
+        "cooperation": 4.5
+      },
+      "avgExecutionDays": 2.2,
+      "complaintsCount": 1,
       "active": true
     },
     {
@@ -663,10 +689,23 @@
       "nameAr": "مؤسسة إشراقة للنظافة وإدارة المرافق",
       "nameEn": "Ishraqah Facility Care",
       "crNumber": "1010778899",
+      "vatNumber": "310661188200003",
       "category": "نظافة وصيانة عامة",
+      "city": "الرياض",
+      "nationalAddress": "RYDO1104 · حي العليا",
+      "iban": "SA5520000001928374650011",
+      "contactPerson": "سعد بن فهد المطيري",
       "phone": "0541129988",
       "email": "care@ishraqah.sa",
       "rating": 4.7,
+      "ratingBreakdown": {
+        "quality": 4.8,
+        "punctuality": 4.7,
+        "pricing": 4.6,
+        "cooperation": 4.7
+      },
+      "avgExecutionDays": 1,
+      "complaintsCount": 0,
       "active": true
     }
   ],
@@ -956,10 +995,31 @@
       "altPhone": "0509988771",
       "email": "bandar.g@gmail.com",
       "employer": "الهيئة السعودية للبيانات",
+      "tenantType": "عائلة",
+      "birthDate": "1988-04-12",
+      "maritalStatus": "متزوج",
+      "familyMembersCount": 4,
+      "emergencyContactName": "محمد الغامدي (الأخ)",
+      "emergencyContactPhone": "0504411229",
+      "nationalAddress": "RYDA7412 · حي الياسمين · الرياض",
       "classification": "نشط",
       "rating": 5,
-      "notes": "مستأجر ملتزم بالسداد المبكر",
-      "createdAt": "2026-01-12T09:00:00.000Z",
+      "behaviorScores": {
+        "paymentCommitment": 5,
+        "unitCare": 5,
+        "cooperation": 5,
+        "penaltyTotal": 0
+      },
+      "violationNotes": [
+        {
+          "id": "vn-1",
+          "title": "إشادة التزام بالسداد المبكر",
+          "category": "إشادة",
+          "details": "سدد جميع الأقساط قبل موعد الاستحقاق دون أي تأخير.",
+          "createdBy": "usr-acc",
+          "createdAt": "2026-07-14T12:00:00.000Z"
+        }
+      ],
       "onboardingChecklist": {
         "idVerified": false,
         "docsArchived": false,
@@ -967,7 +1027,9 @@
         "contractSigned": false,
         "ejarRegistered": false,
         "handoverSigned": false
-      }
+      },
+      "notes": "مستأجر ملتزم بالسداد المبكر",
+      "createdAt": "2026-01-12T09:00:00.000Z"
     },
     {
       "id": "ten-2",
@@ -976,10 +1038,41 @@
       "nationalIdOrIqama": "1077331199",
       "nationality": "سعودي",
       "phone": "0547788990",
+      "altPhone": "0558800112",
       "email": "tariq.s@yahoo.com",
       "employer": "شركة الاتصالات المتقدمة",
+      "tenantType": "فرد",
+      "birthDate": "1992-09-21",
+      "maritalStatus": "أعزب",
+      "emergencyContactName": "إبراهيم الشهري (الوالد)",
+      "emergencyContactPhone": "0501199882",
+      "nationalAddress": "RYDA7415 · حي الياسمين · الرياض",
       "classification": "نشط",
       "rating": 3,
+      "behaviorScores": {
+        "paymentCommitment": 3,
+        "unitCare": 4,
+        "cooperation": 4,
+        "penaltyTotal": 250
+      },
+      "violationNotes": [
+        {
+          "id": "vn-2",
+          "title": "تأخر في القسط الثالث والرابع",
+          "category": "تأخر سداد",
+          "details": "تم سداد 9,000 ر.س جزئياً من القسط الثالث وجارٍ متابعة الرصيد المتبقي.",
+          "createdBy": "usr-acc",
+          "createdAt": "2026-11-05T10:30:00.000Z"
+        }
+      ],
+      "onboardingChecklist": {
+        "idVerified": true,
+        "docsArchived": true,
+        "depositPaid": true,
+        "contractSigned": true,
+        "ejarRegistered": true,
+        "handoverSigned": true
+      },
       "notes": "لديه دفعة جزئية ومتبقٍ قيد المتابعة",
       "createdAt": "2026-02-01T09:00:00.000Z"
     },
@@ -990,10 +1083,30 @@
       "nationalIdOrIqama": "7022119988",
       "nationality": "كيان تجاري سعودي",
       "phone": "0502233445",
+      "altPhone": "0114422990",
       "email": "accounts@mazaqbun.sa",
       "employer": "سجل تجاري 1010554433",
+      "tenantType": "شركة",
+      "emergencyContactName": "وليد القحطاني (مدير التشغيل)",
+      "emergencyContactPhone": "0559922110",
+      "nationalAddress": "RYDM3910 · طريق أنس بن مالك · الرياض",
       "classification": "نشط",
       "rating": 4,
+      "behaviorScores": {
+        "paymentCommitment": 4,
+        "unitCare": 5,
+        "cooperation": 4,
+        "penaltyTotal": 0
+      },
+      "violationNotes": [],
+      "onboardingChecklist": {
+        "idVerified": true,
+        "docsArchived": true,
+        "depositPaid": true,
+        "contractSigned": true,
+        "ejarRegistered": true,
+        "handoverSigned": true
+      },
       "notes": "مستأجر المعرض التجاري S-01",
       "createdAt": "2025-11-20T09:00:00.000Z"
     },
@@ -1006,8 +1119,25 @@
       "phone": "0564455112",
       "email": "yasser.m@domain.sa",
       "employer": "مكتب الاستشارات الهندسية",
+      "tenantType": "فرد",
+      "birthDate": "1985-11-02",
+      "maritalStatus": "متزوج",
       "classification": "محتمل",
       "rating": 4,
+      "behaviorScores": {
+        "paymentCommitment": 4,
+        "unitCare": 4,
+        "cooperation": 5,
+        "penaltyTotal": 0
+      },
+      "onboardingChecklist": {
+        "idVerified": true,
+        "docsArchived": true,
+        "depositPaid": false,
+        "contractSigned": false,
+        "ejarRegistered": false,
+        "handoverSigned": false
+      },
       "notes": "مربوط إدارياً بالمكتب M-302 بانتظار توثيق العقد في إيجار",
       "createdAt": "2026-11-10T11:00:00.000Z"
     },
@@ -1020,8 +1150,16 @@
       "phone": "0557711223",
       "email": "khalid.olayan@gmail.com",
       "employer": "شركة سابك للتقنية",
+      "tenantType": "فرد",
+      "maritalStatus": "أعزب",
       "classification": "سابق",
       "rating": 5,
+      "behaviorScores": {
+        "paymentCommitment": 5,
+        "unitCare": 5,
+        "cooperation": 5,
+        "penaltyTotal": 0
+      },
       "notes": "سدد جميع الأقساط قبل موعدها وأسلم الوحدة R-401 بحالة ممتازة",
       "createdAt": "2024-10-01T08:00:00.000Z",
       "archivedAt": "2026-09-15T14:00:00.000Z",
@@ -1039,8 +1177,15 @@
       "phone": "0508822199",
       "email": "admin@ofoq-sa.com",
       "employer": "سجل تجاري 1010449922",
+      "tenantType": "شركة",
       "classification": "سابق",
       "rating": 2,
+      "behaviorScores": {
+        "paymentCommitment": 2,
+        "unitCare": 3,
+        "cooperation": 2,
+        "penaltyTotal": 1200
+      },
       "notes": "تأخر متكرر في القسط الأخير وتمت تسوية الإخلاء مع خصم الصيانة من التأمين",
       "createdAt": "2024-11-15T09:00:00.000Z",
       "archivedAt": "2025-12-20T16:10:00.000Z",
@@ -1055,28 +1200,128 @@
       "id": "lead-1",
       "nameAr": "فيصل بن ناصر الزهراني",
       "phone": "0558899112",
+      "email": "faisal.z@outlook.sa",
+      "nationalIdOrIqama": "1088442211",
+      "birthDate": "1991-06-14",
+      "tenantType": "عائلة",
+      "familyMembersCount": 4,
       "source": "منصة عقار",
       "propertyId": "prop-1",
       "unitId": "unit-103",
       "offeredRent": 41000,
+      "paymentFrequency": "ربع سنوي",
+      "officeFee": 1000,
+      "earlyTerminationFee": 2000,
+      "budgetMonthly": 3500,
+      "roomsRequired": 3,
+      "preferredArea": "حي الياسمين",
+      "moveInDate": "2026-12-01",
       "viewingDate": "2026-11-16",
       "viewingResult": "أبدى رغبة جدية وطلب دفعتين",
       "status": "عرض سعر",
+      "approvalState": "بانتظار الموافقة",
+      "rating": 5,
       "assignedTo": "usr-lease",
-      "notes": "تم إرسال عرض السعر الرسمي"
+      "notes": "تم إرسال عرض السعر الرسمي",
+      "createdAt": "2026-11-12T10:15:00.000Z",
+      "updatedAt": "2026-11-14T09:20:00.000Z",
+      "interactions": [
+        {
+          "id": "lint-1",
+          "type": "visit",
+          "direction": "inbound",
+          "summary": "تمت معاينة وحدة A-103 وأبدى رغبة جادة بالتعاقد",
+          "actorName": "ريم الحربي",
+          "createdAt": "2026-11-13T16:30:00.000Z"
+        },
+        {
+          "id": "lint-2",
+          "type": "escalation",
+          "direction": "outbound",
+          "summary": "إرسال بطاقة بيانات المهتم للمالك عبدالعزيز الراجحي للموافقة على الدفع الربع سنوي",
+          "actorName": "ريم الحربي",
+          "createdAt": "2026-11-14T09:20:00.000Z"
+        }
+      ]
     },
     {
       "id": "lead-2",
       "nameAr": "د. نورة بنت فهد السالم",
       "phone": "0503344119",
+      "email": "dr.noura@clinic.sa",
+      "nationalIdOrIqama": "1044991123",
+      "birthDate": "1988-03-22",
+      "tenantType": "شركة",
+      "companyCrNumber": "1010558899",
       "source": "زيارة مباشرة",
       "propertyId": "prop-2",
       "unitId": "unit-203",
       "offeredRent": 43200,
+      "paymentFrequency": "سنوي",
+      "officeFee": 1500,
+      "earlyTerminationFee": 3000,
+      "budgetMonthly": 3800,
+      "roomsRequired": 2,
+      "preferredArea": "حي الملقا",
+      "moveInDate": "2026-11-25",
       "viewingDate": "2026-11-18",
       "status": "جديد",
+      "approvalState": "لم يُرسل",
+      "rating": 4,
       "assignedTo": "usr-lease",
-      "notes": "تبحث عن مكتب إداري جاهز الأسبوع القادم"
+      "notes": "تبحث عن مكتب إداري جاهز الأسبوع القادم",
+      "createdAt": "2026-11-14T08:00:00.000Z",
+      "updatedAt": "2026-11-14T08:00:00.000Z",
+      "interactions": [
+        {
+          "id": "lint-3",
+          "type": "call",
+          "direction": "inbound",
+          "summary": "اتصال استفسار عن المكتب الإداري B-203 وحجز موعد معاينة",
+          "actorName": "ريم الحربي",
+          "createdAt": "2026-11-14T08:05:00.000Z"
+        }
+      ]
+    }
+  ],
+  "leadEscalations": [
+    {
+      "id": "lesc-1",
+      "requestCode": "ESC-2026-001",
+      "leadId": "lead-1",
+      "propertyId": "prop-1",
+      "unitId": "unit-103",
+      "recipientType": "owner",
+      "recipientId": "own-1",
+      "recipientName": "عبدالعزيز بن محمد الراجحي",
+      "recipientPhone": "0559812200",
+      "recipientEmail": "a.rajhi@outlook.sa",
+      "channel": "واتساب",
+      "status": "بانتظار الموافقة",
+      "priority": "عاجل",
+      "employeeNotes": "العميل ملتزم وميزانيته مناسبة، أنصح بالموافقة على دفع ربع سنوي",
+      "token": "tok-esc-2026-001",
+      "tokenExpiresAt": "2026-11-17T09:20:00.000Z",
+      "snapshot": {
+        "companyName": "شركة دار الأفق لإدارة الأملاك والعقارات",
+        "propertyName": "مجمع الياسمين السكني",
+        "unitNumber": "A-103",
+        "leadName": "فيصل بن ناصر الزهراني",
+        "nationalIdOrIqama": "1088442211",
+        "hasIdPhoto": false,
+        "birthDate": "1991-06-14",
+        "phone": "0558899112",
+        "rentAmount": 41000,
+        "paymentFrequency": "ربع سنوي",
+        "officeFee": 1000,
+        "earlyTerminationFee": 2000,
+        "employeeNotes": "العميل ملتزم وميزانيته مناسبة، أنصح بالموافقة على دفع ربع سنوي",
+        "registrationDate": "2026-11-12",
+        "registrationSource": "منصة عقار"
+      },
+      "createdBy": "usr-lease",
+      "createdByName": "ريم الحربي",
+      "createdAt": "2026-11-14T09:20:00.000Z"
     }
   ],
   "contracts": [
@@ -1085,17 +1330,24 @@
       "internalNumber": "CNT-2026-001",
       "ejarNumber": "EJ-1049283711",
       "ejarStatus": "موثق في إيجار",
+      "ejarPortalUrl": "https://ejar.sa/contracts/EJ-1049283711",
       "lifecycleStatus": "نشط",
       "propertyId": "prop-1",
       "unitId": "unit-101",
       "tenantId": "ten-1",
       "startDate": "2026-01-15",
       "endDate": "2027-01-14",
+      "handoverDate": "2026-01-15",
+      "occupancyStartDate": "2026-01-15",
+      "occupancyStatus": "نشط",
+      "keysDeliveredCount": 4,
+      "remotesDeliveredCount": 4,
       "annualRent": 48000,
       "paymentFrequency": "نصف سنوي",
       "installmentsCount": 2,
       "securityDeposit": 3000,
       "officeFee": 1200,
+      "earlyTerminationFee": 4000,
       "managementCommissionPercent": 5,
       "includedServices": "المياه والصيانة الخارجية للعمارة",
       "version": 1,
@@ -1107,17 +1359,24 @@
       "internalNumber": "CNT-2026-002",
       "ejarNumber": "EJ-1049289922",
       "ejarStatus": "موثق في إيجار",
+      "ejarPortalUrl": "https://ejar.sa/contracts/EJ-1049289922",
       "lifecycleStatus": "نشط",
       "propertyId": "prop-1",
       "unitId": "unit-102",
       "tenantId": "ten-2",
       "startDate": "2026-02-01",
       "endDate": "2026-12-10",
+      "handoverDate": "2026-02-01",
+      "occupancyStartDate": "2026-02-01",
+      "occupancyStatus": "نشط",
+      "keysDeliveredCount": 3,
+      "remotesDeliveredCount": 4,
       "annualRent": 54000,
       "paymentFrequency": "ربع سنوي",
       "installmentsCount": 4,
       "securityDeposit": 4000,
       "officeFee": 1350,
+      "earlyTerminationFee": 4500,
       "managementCommissionPercent": 5,
       "includedServices": "شامل المياه فقط",
       "version": 1,
@@ -1130,17 +1389,24 @@
       "internalNumber": "CNT-2025-019",
       "ejarNumber": "EJ-1048112233",
       "ejarStatus": "موثق في إيجار",
+      "ejarPortalUrl": "https://ejar.sa/contracts/EJ-1048112233",
       "lifecycleStatus": "نشط",
       "propertyId": "prop-2",
       "unitId": "unit-201",
       "tenantId": "ten-3",
       "startDate": "2025-12-01",
       "endDate": "2026-11-30",
+      "handoverDate": "2025-12-01",
+      "occupancyStartDate": "2025-12-01",
+      "occupancyStatus": "نشط",
+      "keysDeliveredCount": 2,
+      "remotesDeliveredCount": 4,
       "annualRent": 120000,
       "paymentFrequency": "ربع سنوي",
       "installmentsCount": 4,
       "securityDeposit": 10000,
       "officeFee": 3000,
+      "earlyTerminationFee": 15000,
       "managementCommissionPercent": 6,
       "includedServices": "بدون خدمات",
       "version": 1,
@@ -1734,6 +2000,144 @@
       "createdBy": "usr-lease",
       "notes": "تنظيف شامل وتجهيز المكتب M-405 بعد الإخلاء",
       "createdAt": "2026-11-13T11:00:00.000Z"
+    }
+  ],
+  "supplierInvoices": [
+    {
+      "id": "sinv-1",
+      "invoiceCode": "SINV-2026-001",
+      "supplierInvoiceNumber": "NAS-2026-4410",
+      "invoiceDate": "2026-11-12",
+      "receivedDate": "2026-11-12",
+      "dueDate": "2026-11-25",
+      "vendorId": "vnd-1",
+      "propertyId": "prop-1",
+      "unitId": "unit-104",
+      "ticketId": "tkt-1",
+      "items": [
+        {
+          "id": "si-1",
+          "description": "توريد كمبروسر سبليت 24,000 وحدة أصلي",
+          "quantity": 1,
+          "unitPrice": 1300,
+          "total": 1300
+        },
+        {
+          "id": "si-2",
+          "description": "أجور فك وتركيب وتعبئة فريون 410A",
+          "quantity": 1,
+          "unitPrice": 308.7,
+          "total": 308.7
+        }
+      ],
+      "subtotal": 1608.7,
+      "vatAmount": 241.3,
+      "totalAmount": 1850,
+      "paidAmount": 0,
+      "remainingAmount": 1850,
+      "currency": "SAR",
+      "status": "بانتظار الاعتماد",
+      "zatcaQrVerified": true,
+      "zatcaQrData": "ZATCA|310884422100003|2026-11-12|1850.00|241.30",
+      "notes": "ضمان 12 شهراً على الكمبروسر والتركيب",
+      "createdBy": "usr-mm",
+      "createdAt": "2026-11-12T14:25:00.000Z"
+    },
+    {
+      "id": "sinv-2",
+      "invoiceCode": "SINV-2026-002",
+      "supplierInvoiceNumber": "RKZ-2026-1182",
+      "invoiceDate": "2026-11-05",
+      "receivedDate": "2026-11-06",
+      "dueDate": "2026-11-12",
+      "vendorId": "vnd-2",
+      "propertyId": "prop-2",
+      "items": [
+        {
+          "id": "si-3",
+          "description": "صيانة لوحة التوزيع الرئيسية وتغيير قواطع الممرات",
+          "quantity": 2,
+          "unitPrice": 950,
+          "total": 1900
+        },
+        {
+          "id": "si-4",
+          "description": "فحص مضخات المياه الاحتياطية",
+          "quantity": 1,
+          "unitPrice": 600,
+          "total": 600
+        }
+      ],
+      "subtotal": 2500,
+      "vatAmount": 375,
+      "totalAmount": 2875,
+      "paidAmount": 1500,
+      "remainingAmount": 1375,
+      "currency": "SAR",
+      "status": "متأخرة",
+      "zatcaQrVerified": true,
+      "zatcaQrData": "ZATCA|310772233400003|2026-11-05|2875.00|375.00",
+      "notes": "سُددت دفعة أولى 1,500 ر.س ومتبقي 1,375 ر.س",
+      "createdBy": "usr-acc",
+      "approvedBy": "usr-gm",
+      "createdAt": "2026-11-06T09:15:00.000Z"
+    }
+  ],
+  "recurringExpenses": [
+    {
+      "id": "rexp-1",
+      "title": "كهرباء المشاعات والمصاعد الشهرية",
+      "category": "مصروفات التشغيل",
+      "subCategory": "كهرباء مشاعات",
+      "propertyId": "prop-1",
+      "estimatedAmount": 1450,
+      "currency": "SAR",
+      "bearer": "المالك",
+      "frequency": "شهري",
+      "dayOfMonth": 28,
+      "enabled": true,
+      "lastGeneratedMonth": "2026-10",
+      "createdBy": "usr-acc",
+      "createdAt": "2026-01-01T08:00:00.000Z"
+    },
+    {
+      "id": "rexp-2",
+      "title": "عقد النظافة الدورية للممرات والواجهة",
+      "category": "مصروفات التشغيل",
+      "subCategory": "نظافة عامة",
+      "propertyId": "prop-2",
+      "vendorId": "vnd-3",
+      "estimatedAmount": 1800,
+      "currency": "SAR",
+      "bearer": "المالك",
+      "frequency": "شهري",
+      "dayOfMonth": 5,
+      "enabled": true,
+      "lastGeneratedMonth": "2026-10",
+      "createdBy": "usr-sup",
+      "createdAt": "2026-02-01T08:00:00.000Z"
+    }
+  ],
+  "propertyBudgets": [
+    {
+      "id": "pbdg-1",
+      "propertyId": "prop-1",
+      "month": "2026-11",
+      "monthlyLimitSar": 5000,
+      "alertThresholdPercent": 80,
+      "blockAt100Percent": false,
+      "updatedBy": "usr-gm",
+      "updatedAt": "2026-11-01T08:00:00.000Z"
+    },
+    {
+      "id": "pbdg-2",
+      "propertyId": "prop-2",
+      "month": "2026-11",
+      "monthlyLimitSar": 8000,
+      "alertThresholdPercent": 80,
+      "blockAt100Percent": false,
+      "updatedBy": "usr-gm",
+      "updatedAt": "2026-11-01T08:00:00.000Z"
     }
   ],
   "assets": [
@@ -2726,6 +3130,48 @@
   ],
   "auditLogs": [
     {
+      "id": "aud-mwh0ljwo-zdqy9",
+      "userId": "usr-gm",
+      "userName": "فهد بن عبدالرحمن السبيعي",
+      "userRole": "المدير العام",
+      "deviceName": "Windows Desktop · المكتب الرئيسي",
+      "ipAddress": "192.168.10.1",
+      "geoLocation": "الرياض · المملكة العربية السعودية",
+      "action": "استعادة نسخة احتياطية",
+      "entityType": "Backup",
+      "entityId": "bkp-mwh0lju4-vec01",
+      "summary": "تمت استعادة النظام والتحقق من سلامة البيانات",
+      "createdAt": "2026-11-14T23:06:15.432Z"
+    },
+    {
+      "id": "aud-mwh0lbyp-q7xlr",
+      "userId": "usr-gm",
+      "userName": "فهد بن عبدالرحمن السبيعي",
+      "userRole": "المدير العام",
+      "deviceName": "Windows Desktop · المكتب الرئيسي",
+      "ipAddress": "192.168.10.1",
+      "geoLocation": "الرياض · المملكة العربية السعودية",
+      "action": "استعادة نسخة احتياطية",
+      "entityType": "Backup",
+      "entityId": "bkp-mwh0lbxh-ry70s",
+      "summary": "تمت استعادة النظام والتحقق من سلامة البيانات",
+      "createdAt": "2026-11-14T23:06:05.137Z"
+    },
+    {
+      "id": "aud-mwh0260a-fo8uf",
+      "userId": "usr-gm",
+      "userName": "فهد بن عبدالرحمن السبيعي",
+      "userRole": "المدير العام",
+      "deviceName": "Windows Desktop · المكتب الرئيسي",
+      "ipAddress": "192.168.10.1",
+      "geoLocation": "الرياض · المملكة العربية السعودية",
+      "action": "تحديث إعدادات النظام والمركز",
+      "entityType": "CompanySettings",
+      "entityId": "settings",
+      "summary": "تحديث إعدادات المنشأة والعملة الأساسية (SAR)",
+      "createdAt": "2026-11-14T22:51:10.954Z"
+    },
+    {
       "id": "aud-mwgtk3uj-t4y62",
       "userId": "usr-gm",
       "userName": "فهد بن عبدالرحمن السبيعي",
@@ -2982,6 +3428,22 @@
   ],
   "backups": [
     {
+      "id": "bkp-mwh0lju4-vec01",
+      "label": "e2e-verify-tmp",
+      "createdAt": "2026-11-14T23:06:15.342Z",
+      "createdBy": "فهد بن عبدالرحمن السبيعي",
+      "recordCount": 34,
+      "sizeKb": 143
+    },
+    {
+      "id": "bkp-mwh0lbxh-ry70s",
+      "label": "e2e-verify-tmp",
+      "createdAt": "2026-11-14T23:06:05.095Z",
+      "createdBy": "فهد بن عبدالرحمن السبيعي",
+      "recordCount": 34,
+      "sizeKb": 142
+    },
+    {
       "id": "bkp-mwgstrvw-6e52c",
       "label": "Pre-smoke-test snapshot",
       "createdAt": "2026-11-14T19:28:42.094Z",
@@ -3041,6 +3503,42 @@
     "require2faForManagersAndAccountants": true
   },
   "loginHistory": [
+    {
+      "id": "lgn-mwh0kutj-ns7ee",
+      "userId": "usr-sys",
+      "userName": "عبدالله بن فهد السبيعي",
+      "userRole": "مالك النظام",
+      "deviceName": "MacBook Pro M3 · الإدارة العليا",
+      "ipAddress": "2001:16a2:789e:2100:608a:37e:971e:dcfa",
+      "geoLocation": "الرياض · المملكة العربية السعودية",
+      "method": "كلمة المرور",
+      "success": true,
+      "createdAt": "2026-11-14T23:05:42.919Z"
+    },
+    {
+      "id": "lgn-mwh0gd7o-30kov",
+      "userId": "usr-sys",
+      "userName": "عبدالله بن فهد السبيعي",
+      "userRole": "مالك النظام",
+      "deviceName": "MacBook Pro M3 · الإدارة العليا",
+      "ipAddress": "2001:16a2:789e:2100:608a:37e:971e:dcfa",
+      "geoLocation": "الرياض · المملكة العربية السعودية",
+      "method": "كلمة المرور",
+      "success": true,
+      "createdAt": "2026-11-14T23:02:13.477Z"
+    },
+    {
+      "id": "lgn-mwgzvj9t-bdr40",
+      "userId": "usr-sys",
+      "userName": "عبدالله بن فهد السبيعي",
+      "userRole": "مالك النظام",
+      "deviceName": "MacBook Pro M3 · الإدارة العليا",
+      "ipAddress": "2001:16a2:789e:2100:608a:37e:971e:dcfa",
+      "geoLocation": "الرياض · المملكة العربية السعودية",
+      "method": "كلمة المرور",
+      "success": true,
+      "createdAt": "2026-11-14T22:46:01.553Z"
+    },
     {
       "id": "lgn-mwgtk46w-je1a7",
       "userId": "usr-gm",
@@ -3452,6 +3950,42 @@
       "updatedAt": "2026-11-01T12:00:00.000Z"
     }
   ],
+  "meterReadings": [
+    {
+      "id": "mr-1",
+      "readingNumber": "MTR-2026-001",
+      "propertyId": "prop-1",
+      "unitId": "unit-101",
+      "meterType": "كهرباء",
+      "meterNumber": "ELC-99011",
+      "previousReading": 14200,
+      "currentReading": 14860,
+      "consumption": 660,
+      "billAmount": 215,
+      "currency": "SAR",
+      "billingPeriod": "2026-11",
+      "recordedBy": "فهد بن عبدالرحمن السبيعي",
+      "notes": "قراءة شهر نوفمبر الدورية - عمارة النخيل",
+      "createdAt": "2026-11-10T09:30:00.000Z"
+    },
+    {
+      "id": "mr-2",
+      "readingNumber": "MTR-2026-002",
+      "propertyId": "prop-2",
+      "unitId": "unit-201",
+      "meterType": "مياه",
+      "meterNumber": "WTR-44021",
+      "previousReading": 3180,
+      "currentReading": 3245,
+      "consumption": 65,
+      "billAmount": 95,
+      "currency": "SAR",
+      "billingPeriod": "2026-11",
+      "recordedBy": "أحمد العلي",
+      "notes": "فاتورة استهلاك المياه الشهرية",
+      "createdAt": "2026-11-11T11:15:00.000Z"
+    }
+  ],
   "teamSeeded": true,
-  "lastUpdatedAt": "2026-11-14T19:49:11.096Z"
+  "lastUpdatedAt": "2026-11-14T23:06:15.432Z"
 }

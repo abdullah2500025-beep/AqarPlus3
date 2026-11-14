@@ -71,7 +71,7 @@ export function LayoutShell({ children }: LayoutShellProps) {
     { id: 'dashboard', labelAr: 'لوحة التحكم', labelEn: 'Dashboard', icon: LayoutDashboard, ownerAllowed: true },
     { id: 'properties', labelAr: 'العقارات', labelEn: 'Properties', icon: Building2, ownerAllowed: true },
     { id: 'leasing_finance', labelAr: 'الإيجارات والمالية', labelEn: 'Leasing & Finance', icon: Wallet, ownerAllowed: true },
-    { id: 'tenants', labelAr: 'المستأجرون', labelEn: 'Tenants', icon: Users },
+    { id: 'tenants', labelAr: 'المستأجرون والمهتمون', labelEn: 'Tenants & Leads', icon: Users, ownerAllowed: true },
     { id: 'maintenance', labelAr: 'الصيانة والمهام', labelEn: 'Maintenance & Tasks', icon: Wrench },
     { id: 'reports', labelAr: 'التقارير', labelEn: 'Reports', icon: BarChart3, ownerAllowed: true },
     { id: 'team', labelAr: 'فريق العمل', labelEn: 'Team & Roles', icon: UserCog },

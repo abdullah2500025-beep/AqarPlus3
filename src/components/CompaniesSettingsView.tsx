@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Building, Coins, Info, Plus, Save, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { Building, Info, Plus, Save, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
-import { CurrencyCode, PropertyOwnershipMode } from '../types/aqar';
-import { CURRENCY_META, DEFAULT_CURRENCY_RATES_TO_SAR, formatCurrency } from '../utils/formatters';
+import { PropertyOwnershipMode } from '../types/aqar';
+import { formatCurrency } from '../utils/formatters';
 import { PrintViewButton } from './PrintViewButton';
 
 export function CompaniesSettingsView() {
-  const { state, lang, hasPermission, mutate, pushToast, baseCurrency, setBaseCurrency, convertToBase, openOnboarding, setActiveNav } = useAqar();
+  const { state, lang, hasPermission, mutate, pushToast, baseCurrency, convertToBase, openOnboarding, setActiveNav } = useAqar();
   const [showAddCompany, setShowAddCompany] = useState(false);
 
   const [companyForm, setCompanyForm] = useState({
@@ -36,11 +36,6 @@ export function CompaniesSettingsView() {
     dateCalendar: state?.settings.dateCalendar || 'هجري وميلادي',
     supervisorApprovalThreshold: state?.settings.supervisorApprovalThreshold ?? 1500,
     defaultManagementFeePercent: state?.settings.defaultManagementFeePercent ?? 5,
-    baseCurrency: state?.settings.baseCurrency || baseCurrency,
-    rates: {
-      ...DEFAULT_CURRENCY_RATES_TO_SAR,
-      ...(state?.settings.currencyRatesToSar || {}),
-    },
   }));
 
   const ownershipBreakdown = useMemo(() => {
@@ -136,14 +131,12 @@ export function CompaniesSettingsView() {
         dateCalendar: settingsForm.dateCalendar,
         supervisorApprovalThreshold: settingsForm.supervisorApprovalThreshold,
         defaultManagementFeePercent: settingsForm.defaultManagementFeePercent,
-        baseCurrency: settingsForm.baseCurrency,
-        currencyRatesToSar: settingsForm.rates,
+        baseCurrency: 'SAR',
       },
-      { offlineDescAr: 'تحديث إعدادات المنشأة والعملات' }
+      { offlineDescAr: 'تحديث إعدادات المنشأة' }
     );
     if (res) {
-      setBaseCurrency(settingsForm.baseCurrency as CurrencyCode);
-      pushToast('success', lang === 'ar' ? 'تم حفظ إعدادات المنشأة وأسعار الصرف بنجاح' : 'Settings & exchange rates saved');
+      pushToast('success', lang === 'ar' ? 'تم حفظ إعدادات المنشأة بنجاح (العملة المعتمدة: الريال السعودي)' : 'Organization settings saved');
     }
   };
 
@@ -152,12 +145,12 @@ export function CompaniesSettingsView() {
       <div className="flex flex-wrap items-center justify-between gap-4 no-print">
         <div>
           <h2 className="text-base font-bold">
-            {lang === 'ar' ? 'إدارة الشركات وفصل الحسابات وتعدد العملات' : 'Multi-Company, Ownership Separation & Currency Settings'}
+            {lang === 'ar' ? 'إدارة الشركات وفصل الحسابات' : 'Multi-Company & Ownership Separation'}
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             {lang === 'ar'
-              ? 'فصل إيرادات الشركة عن إيرادات الملاك، ضبط أسعار الصرف للعملات، وإعدادات الإيصالات الرسمية والتقويم.'
-              : 'Separate company and owner revenues, configure multi-currency exchange rates, receipts, and calendar settings.'}
+              ? 'فصل إيرادات الشركة عن إيرادات الملاك، وضبط الإيصالات الرسمية والتقويم بالريال السعودي (SAR).'
+              : 'Separate company and owner revenues, receipts, and calendar settings in Saudi Riyal (SAR).'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -296,69 +289,17 @@ export function CompaniesSettingsView() {
         </table>
       </div>
 
-      {/* Section 3: Base Currency Rates & Organization Settings */}
-      <form onSubmit={handleSaveSettings} className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-5 p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-4">
-          <div className="flex items-center gap-2">
-            <Coins className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
+      {/* Section 3: Organization Settings */}
+      <form onSubmit={handleSaveSettings} className="grid grid-cols-1 gap-6">
+        <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-bold">
-              {lang === 'ar' ? 'تعدد العملات وأسعار الصرف المرجعية' : 'Multi-Currency & Exchange Rates'}
+              {lang === 'ar' ? 'إعدادات المنشأة والتقويم والاعتماد' : 'Organization, Calendar & Compliance Settings'}
             </h3>
+            <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+              {lang === 'ar' ? 'العملة الأساسية للتطبيق: الريال السعودي (SAR)' : 'System Currency: SAR'}
+            </span>
           </div>
-
-          <div className="text-xs space-y-3">
-            <div>
-              <label className="text-[11px] text-slate-500 block mb-1">
-                {lang === 'ar' ? 'العملة الأساسية للتقارير المجمعة' : 'Default Reporting Base Currency'}
-              </label>
-              <select
-                value={settingsForm.baseCurrency}
-                onChange={(e) => {
-                  const next = e.target.value as CurrencyCode;
-                  setSettingsForm({ ...settingsForm, baseCurrency: next });
-                  setBaseCurrency(next);
-                }}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                {(Object.keys(CURRENCY_META) as CurrencyCode[]).map((code) => (
-                  <option key={code} value={code}>
-                    {lang === 'ar' ? CURRENCY_META[code].labelAr : CURRENCY_META[code].labelEn}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-2 pt-1">
-              <div className="text-[11px] text-slate-500">
-                {lang === 'ar' ? 'معامل التحويل إلى الريال السعودي (1 وحدة = X SAR)' : 'Exchange Rate to SAR (1 Unit = X SAR)'}
-              </div>
-              {(['SAR', 'AED', 'USD', 'EGP', 'KWD'] as CurrencyCode[]).map((code) => (
-                <div key={code} className="flex items-center justify-between gap-3">
-                  <span className="font-medium">{lang === 'ar' ? CURRENCY_META[code].labelAr : code}</span>
-                  <input
-                    type="number"
-                    step="0.001"
-                    min={0.001}
-                    disabled={code === 'SAR'}
-                    value={settingsForm.rates[code]}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        rates: { ...settingsForm.rates, [code]: Number(e.target.value) || 1 },
-                      })
-                    }
-                    className="w-28 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num text-end disabled:opacity-60"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="lg:col-span-7 p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-4">
-          <h3 className="text-sm font-bold">
-            {lang === 'ar' ? 'إعدادات المنشأة والتقويم والاعتماد' : 'Organization, Calendar & Compliance Settings'}
-          </h3>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
             <div>
@@ -444,7 +385,7 @@ export function CompaniesSettingsView() {
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{lang === 'ar' ? 'حفظ الإعدادات وأسعار الصرف' : 'Save Settings & Rates'}</span>
+              <span>{lang === 'ar' ? 'حفظ إعدادات المنشأة' : 'Save Organization Settings'}</span>
             </button>
           </div>
         </div>

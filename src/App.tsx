@@ -18,6 +18,7 @@ import { SettingsCenterView } from './components/SettingsCenterView';
 import { CommunicationTemplatesView } from './components/CommunicationTemplatesView';
 import { OnboardingJourney } from './components/OnboardingJourney';
 import { TeamWorkforceView } from './components/TeamWorkforceView';
+import { PublicProspectViews } from './components/PublicProspectViews';
 
 function AqarWorkspace() {
   const { loading, state, activeNav, lang, onboardingConfig, closeOnboarding } = useAqar();
@@ -147,6 +148,24 @@ function AqarWorkspace() {
 }
 
 export default function App() {
+  const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const leadDecisionToken = params?.get('leadDecision');
+  const isProspectForm = params?.get('prospectForm') === '1';
+
+  if (leadDecisionToken) {
+    return <PublicProspectViews mode="decision" token={leadDecisionToken} />;
+  }
+
+  if (isProspectForm) {
+    return (
+      <PublicProspectViews
+        mode="prospect"
+        propertyId={params?.get('propertyId') || undefined}
+        unitId={params?.get('unitId') || undefined}
+      />
+    );
+  }
+
   return (
     <AqarProvider>
       <AqarWorkspace />

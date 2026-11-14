@@ -11,7 +11,6 @@ import {
   ChevronRight,
   CloudCog,
   Code2,
-  Coins,
   DatabaseBackup,
   Download,
   FileCheck2,
@@ -47,10 +46,9 @@ import { useAqar } from '../context/AqarContext';
 import {
   BankAccountConfig,
   CompanySettings,
-  CurrencyCode,
   PropertyOwnershipMode,
 } from '../types/aqar';
-import { CURRENCY_META, DEFAULT_CURRENCY_RATES_TO_SAR, formatCurrency, formatDateTime } from '../utils/formatters';
+import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
 import { AboutAppView } from './AboutAppView';
 import { PIN_STORAGE_KEY } from './OnboardingJourney';
@@ -95,9 +93,9 @@ const SETTINGS_SECTIONS: SectionCardMeta[] = [
     id: 'general',
     titleAr: 'إعدادات التطبيق العامة',
     titleEn: 'General Preferences',
-    descAr: 'اللغة، العملة، التقويم، تنسيق الأرقام، والوضع الليلي',
-    descEn: 'Language, RTL, currency rates, calendar, numerals & theme',
-    keywords: 'لغة عربي إنجليزي عملة ريال تقويم هجري ميلادي وضع ليلي منطقة زمنية',
+    descAr: 'اللغة، التقويم، تنسيق الأرقام، والوضع الليلي',
+    descEn: 'Language, RTL, calendar, numerals & theme',
+    keywords: 'لغة عربي إنجليزي تقويم هجري ميلادي وضع ليلي منطقة زمنية',
     icon: Sliders,
     iconColorClass: 'bg-[#26478D]/10 dark:bg-[#26478D]/30 text-[#26478D] dark:text-blue-400',
   },
@@ -186,7 +184,6 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
     mutate,
     pushToast,
     baseCurrency,
-    setBaseCurrency,
     convertToBase,
     openOnboarding,
     setLang,
@@ -216,10 +213,6 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
   // Full Settings Draft synced with state.settings
   const [draft, setDraft] = useState<CompanySettings>(() => ({
     ...(state?.settings || ({} as CompanySettings)),
-    currencyRatesToSar: {
-      ...DEFAULT_CURRENCY_RATES_TO_SAR,
-      ...(state?.settings.currencyRatesToSar || {}),
-    },
     bankAccounts: state?.settings.bankAccounts || [],
     receiptBranding: state?.settings.receiptBranding || {
       layout: 'portrait',
@@ -1228,7 +1221,6 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
             onSave={async () => {
               const gp = draft.generalPrefs!;
               setLang(gp.language);
-              setBaseCurrency(gp.currency);
               if (gp.themeMode === 'dark' && theme !== 'dark') toggleTheme();
               if (gp.themeMode === 'light' && theme !== 'light') toggleTheme();
               if (gp.themeMode === 'system' && typeof window !== 'undefined') {
@@ -1237,22 +1229,26 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
               }
               await savePartialSettings(
                 {
-                  generalPrefs: gp,
-                  baseCurrency: gp.currency,
-                  currencyRatesToSar: draft.currencyRatesToSar,
+                  generalPrefs: { ...gp, currency: 'SAR' },
+                  baseCurrency: 'SAR',
                   dateCalendar: gp.calendar === 'gregorian' ? 'ميلادي فقط' : 'هجري وميلادي',
                 },
-                isAr ? 'تم حفظ التفضيلات العامة وأسعار الصرف بنجاح' : 'General preferences saved'
+                isAr ? 'تم حفظ التفضيلات العامة بنجاح' : 'General preferences saved'
               );
             }}
           />
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-4">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <Globe className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
-                <span>اللغة والتقويم والأرقام والمظهر</span>
-              </h3>
+          <div className="grid grid-cols-1 gap-6">
+            <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-bold flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
+                  <span>اللغة والتقويم والأرقام والمظهر</span>
+                </h3>
+                <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  {isAr ? 'العملة المعتمدة بالنظام: الريال السعودي (SAR)' : 'System Currency: SAR'}
+                </span>
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <BottomSheetSelect
@@ -1266,22 +1262,6 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                     setDraft((prev) => ({
                       ...prev,
                       generalPrefs: { ...(prev.generalPrefs || state.settings.generalPrefs!), language: val },
-                    }))
-                  }
-                />
-
-                <BottomSheetSelect
-                  label="العملة الافتراضية"
-                  value={draft.generalPrefs?.currency || baseCurrency}
-                  options={(Object.keys(CURRENCY_META) as CurrencyCode[]).map((c) => ({
-                    value: c,
-                    label: CURRENCY_META[c].labelAr,
-                  }))}
-                  onChange={(val) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      baseCurrency: val,
-                      generalPrefs: { ...(prev.generalPrefs || state.settings.generalPrefs!), currency: val },
                     }))
                   }
                 />
@@ -1368,35 +1348,6 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                   </span>
                 </div>
               </div>
-            </div>
-
-            <div className="lg:col-span-5 p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <Coins className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
-                <span>أسعار الصرف المرجعية (مقابل الريال)</span>
-              </h3>
-              {(['SAR', 'AED', 'EGP', 'KWD', 'USD'] as CurrencyCode[]).map((code) => (
-                <div key={code} className="flex items-center justify-between gap-3 text-xs">
-                  <span className="font-medium">{CURRENCY_META[code].labelAr}</span>
-                  <input
-                    type="number"
-                    step="0.001"
-                    min={0.001}
-                    disabled={code === 'SAR'}
-                    value={draft.currencyRatesToSar?.[code] ?? DEFAULT_CURRENCY_RATES_TO_SAR[code]}
-                    onChange={(e) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        currencyRatesToSar: {
-                          ...(prev.currencyRatesToSar || DEFAULT_CURRENCY_RATES_TO_SAR),
-                          [code]: Number(e.target.value) || 1,
-                        },
-                      }))
-                    }
-                    className="w-28 px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num text-end disabled:opacity-50"
-                  />
-                </div>
-              ))}
             </div>
           </div>
         </>

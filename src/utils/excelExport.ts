@@ -1,5 +1,14 @@
 import * as XLSX from 'xlsx';
-import { AqarDatabaseState, CurrencyCode, Installment, Payment, StaffUser } from '../types/aqar';
+import {
+  AqarDatabaseState,
+  CurrencyCode,
+  Expense,
+  Installment,
+  Payment,
+  StaffUser,
+  SupplierInvoice,
+  Tenant,
+} from '../types/aqar';
 import { convertCurrency, DEFAULT_CURRENCY_RATES_TO_SAR, formatDateTime } from './formatters';
 
 interface ExportFinanceReportParams {
@@ -288,6 +297,176 @@ export function exportFinanceReportToExcel({
 
   const dateStr = new Date().toISOString().slice(0, 10);
   const filename = `AqarPlus-Financial-Report-${baseCurrency}-${dateStr}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  return filename;
+}
+
+export function exportTenantStatementToExcel({
+  state,
+  tenant,
+  lang,
+  baseCurrency = 'SAR',
+  currencyRates = DEFAULT_CURRENCY_RATES_TO_SAR,
+}: {
+  state: AqarDatabaseState;
+  tenant: Tenant;
+  lang: 'ar' | 'en';
+  baseCurrency?: CurrencyCode;
+  currencyRates?: Partial<Record<CurrencyCode, number>>;
+}): string {
+  const isAr = lang === 'ar';
+  const wb = XLSX.utils.book_new();
+  const toBase = (amt: number, cur?: CurrencyCode) =>
+    convertCurrency(amt, cur || 'SAR', baseCurrency, currencyRates);
+
+  const contracts = state.contracts.filter((c) => c.tenantId === tenant.id);
+  const installments = state.installments.filter((i) => i.tenantId === tenant.id && i.status !== 'ملغاة');
+  const payments = state.payments.filter((p) => p.tenantId === tenant.id);
+
+  const totalDue = installments.reduce((s, i) => s + toBase(i.amount, i.currency), 0);
+  const totalPaid = payments
+    .filter((p) => p.status === 'معتمد')
+    .reduce((s, p) => s + toBase(p.amount, p.currency), 0);
+  const totalRemaining = installments.reduce((s, i) => s + toBase(i.remainingAmount, i.currency), 0);
+
+  const summaryRows: (string | number)[][] = [
+    [isAr ? `كشف حساب المستأجر — ${tenant.nameAr}` : `Tenant Account Statement — ${tenant.nameEn || tenant.nameAr}`],
+    [isAr ? 'الاسم' : 'Name', tenant.nameAr, isAr ? 'الهوية / الإقامة' : 'National ID', tenant.nationalIdOrIqama],
+    [isAr ? 'الجوال' : 'Phone', tenant.phone, isAr ? 'النوع' : 'Type', tenant.tenantType || 'فرد'],
+    [isAr ? 'البريد' : 'Email', tenant.email || '—', isAr ? 'التقييم' : 'Rating', `${tenant.rating}/5`],
+    [],
+    [isAr ? `إجمالي المستحق (${baseCurrency})` : `Total Due (${baseCurrency})`, Math.round(totalDue * 100) / 100],
+    [isAr ? `إجمالي المدفوع (${baseCurrency})` : `Total Paid (${baseCurrency})`, Math.round(totalPaid * 100) / 100],
+    [isAr ? `الرصيد المتبقي (${baseCurrency})` : `Remaining Balance (${baseCurrency})`, Math.round(totalRemaining * 100) / 100],
+    [],
+    [isAr ? 'جدول الأقساط' : 'Installments Schedule'],
+    isAr
+      ? ['العقد', 'القسط', 'العقار', 'الوحدة', 'الاستحقاق', 'المبلغ', 'المدفوع', 'المتبقي', 'الحالة']
+      : ['Contract', 'Installment', 'Property', 'Unit', 'Due Date', 'Amount', 'Paid', 'Remaining', 'Status'],
+    ...installments.map((inst) => {
+      const c = contracts.find((x) => x.id === inst.contractId);
+      const p = state.properties.find((x) => x.id === inst.propertyId);
+      const u = state.units.find((x) => x.id === inst.unitId);
+      return [
+        c?.internalNumber || inst.contractId,
+        inst.installmentNumber,
+        (isAr ? p?.nameAr : p?.nameEn) || '—',
+        u?.unitNumber || '—',
+        inst.dueDate,
+        inst.amount,
+        inst.paidAmount,
+        inst.remainingAmount,
+        inst.status,
+      ];
+    }),
+  ];
+
+  const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+  wsSummary['!cols'] = [{ wch: 24 }, { wch: 16 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }];
+  wsSummary['!views'] = [{ rightToLeft: isAr }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, isAr ? 'كشف الحساب' : 'Statement');
+
+  const payHeaders = isAr
+    ? ['رقم السند', 'التاريخ', 'نوع الدفعة', 'طريقة الدفع', 'المبلغ', 'العملة', 'المرجع', 'الحالة']
+    : ['Receipt #', 'Date', 'Type', 'Method', 'Amount', 'Currency', 'Reference', 'Status'];
+  const payRows = payments.map((p) => [
+    p.receiptNumber,
+    formatDateTime(p.createdAt, lang),
+    p.paymentType,
+    p.paymentMethod,
+    p.amount,
+    p.currency || 'SAR',
+    p.referenceNumber || '—',
+    p.status,
+  ]);
+  const wsPays = XLSX.utils.aoa_to_sheet([payHeaders, ...payRows]);
+  wsPays['!cols'] = [{ wch: 18 }, { wch: 20 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 18 }, { wch: 14 }];
+  wsPays['!views'] = [{ rightToLeft: isAr }];
+  XLSX.utils.book_append_sheet(wb, wsPays, isAr ? 'سجل المدفوعات' : 'Payments');
+
+  const filename = `AqarPlus-Tenant-Statement-${tenant.id}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  XLSX.writeFile(wb, filename);
+  return filename;
+}
+
+export function exportExpensesReportToExcel({
+  state,
+  expenses,
+  supplierInvoices,
+  lang,
+  baseCurrency = 'SAR',
+  currencyRates = DEFAULT_CURRENCY_RATES_TO_SAR,
+}: {
+  state: AqarDatabaseState;
+  expenses: Expense[];
+  supplierInvoices: SupplierInvoice[];
+  lang: 'ar' | 'en';
+  baseCurrency?: CurrencyCode;
+  currencyRates?: Partial<Record<CurrencyCode, number>>;
+}): string {
+  const isAr = lang === 'ar';
+  const wb = XLSX.utils.book_new();
+  const toBase = (amt: number, cur?: CurrencyCode) =>
+    convertCurrency(amt, cur || 'SAR', baseCurrency, currencyRates);
+
+  const expHeaders = isAr
+    ? ['رقم المصروف', 'التاريخ', 'الفئة', 'الفئة الفرعية', 'العقار', 'المورد', 'المتحمل', 'رقم الفاتورة', 'الصافي', 'الضريبة', 'الإجمالي', `المعادل (${baseCurrency})`, 'طريقة الدفع', 'حالة الدفع', 'حالة الاعتماد', 'ملاحظات']
+    : ['Expense #', 'Date', 'Category', 'Subcategory', 'Property', 'Supplier', 'Bearer', 'Invoice #', 'Net', 'VAT', 'Total', `Base (${baseCurrency})`, 'Method', 'Pay Status', 'Approval', 'Notes'];
+
+  const expRows = expenses.map((e) => {
+    const prop = state.properties.find((p) => p.id === e.propertyId);
+    const vendor = state.vendors.find((v) => v.id === e.vendorId);
+    const cur = e.currency || 'SAR';
+    return [
+      e.expenseNumber,
+      e.date,
+      e.category,
+      e.subCategory || '—',
+      (isAr ? prop?.nameAr : prop?.nameEn) || '—',
+      (isAr ? vendor?.nameAr : vendor?.nameEn) || '—',
+      e.bearer,
+      e.invoiceNumber,
+      e.netAmount ?? e.amount,
+      e.vatAmount ?? 0,
+      e.amount,
+      Math.round(toBase(e.amount, cur) * 100) / 100,
+      e.paymentMethod,
+      e.paymentStatus || '—',
+      e.approvalStatus,
+      e.notes || '',
+    ];
+  });
+  const wsExp = XLSX.utils.aoa_to_sheet([expHeaders, ...expRows]);
+  wsExp['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 18 }, { wch: 22 }, { wch: 22 }, { wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 15 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 28 }];
+  wsExp['!views'] = [{ rightToLeft: isAr }];
+  XLSX.utils.book_append_sheet(wb, wsExp, isAr ? 'سجل المصروفات' : 'Expenses');
+
+  const invHeaders = isAr
+    ? ['كود النظام', 'فاتورة المورد', 'تاريخ الفاتورة', 'تاريخ الاستحقاق', 'المورد', 'العقار', 'الإجمالي', 'المدفوع', 'المتبقي', 'الحالة']
+    : ['Code', 'Supplier Inv #', 'Invoice Date', 'Due Date', 'Supplier', 'Property', 'Total', 'Paid', 'Remaining', 'Status'];
+
+  const invRows = supplierInvoices.map((inv) => {
+    const prop = state.properties.find((p) => p.id === inv.propertyId);
+    const vendor = state.vendors.find((v) => v.id === inv.vendorId);
+    return [
+      inv.invoiceCode,
+      inv.supplierInvoiceNumber,
+      inv.invoiceDate,
+      inv.dueDate || '—',
+      (isAr ? vendor?.nameAr : vendor?.nameEn) || '—',
+      (isAr ? prop?.nameAr : prop?.nameEn) || '—',
+      inv.totalAmount,
+      inv.paidAmount,
+      inv.remainingAmount,
+      inv.status,
+    ];
+  });
+  const wsInv = XLSX.utils.aoa_to_sheet([invHeaders, ...invRows]);
+  wsInv['!cols'] = [{ wch: 16 }, { wch: 18 }, { wch: 13 }, { wch: 13 }, { wch: 24 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 }];
+  wsInv['!views'] = [{ rightToLeft: isAr }];
+  XLSX.utils.book_append_sheet(wb, wsInv, isAr ? 'فواتير الموردين' : 'Supplier Invoices');
+
+  const filename = `AqarPlus-Expenses-Invoices-${baseCurrency}-${new Date().toISOString().slice(0, 10)}.xlsx`;
   XLSX.writeFile(wb, filename);
   return filename;
 }

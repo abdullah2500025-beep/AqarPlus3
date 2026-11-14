@@ -1,9 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Plus, CheckCircle2, XCircle, X, Send, Scale, FileSpreadsheet, ShoppingCart } from 'lucide-react';
+import { Plus, X, Send, Scale, FileSpreadsheet, ShoppingCart, Star, FileText, Building2, Phone, Mail, CreditCard } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
-import { CurrencyCode, ExpenseCategory, Owner, PaymentMethod, PurchaseOrderStatus } from '../types/aqar';
-import { CURRENCY_META, formatCurrency } from '../utils/formatters';
+import { CurrencyCode, Owner, PaymentMethod, PurchaseOrderStatus, Vendor, VendorRatingBreakdown } from '../types/aqar';
+import { formatCurrency } from '../utils/formatters';
 import { PrintViewButton } from './PrintViewButton';
+import { ExpensesInvoicesCenterView } from './ExpensesInvoicesCenterView';
+import { triggerHaptic } from '../utils/haptics';
 
 export function AccountingOwnersView() {
   const {
@@ -22,29 +24,21 @@ export function AccountingOwnersView() {
     currentUser?.role === 'owner' ? 'owners' : 'expenses'
   );
   const [accSubTab, setAccSubTab] = useState<'ledger' | 'trial' | 'statements'>('ledger');
-  const [showAddExpense, setShowAddExpense] = useState(false);
   const [showAddVendor, setShowAddVendor] = useState(false);
   const [transferOwner, setTransferOwner] = useState<Owner | null>(null);
   const [showAddPo, setShowAddPo] = useState(false);
-
-  const [expForm, setExpForm] = useState({
-    category: 'صيانة' as ExpenseCategory,
-    propertyId: '',
-    unitId: '',
-    vendorId: '',
-    invoiceNumber: '',
-    amount: 450,
-    currency: 'SAR' as CurrencyCode,
-    paymentMethod: 'تحويل بنكي' as PaymentMethod,
-    bearer: 'المالك' as 'المالك' | 'الشركة' | 'المستأجر',
-    notes: '',
-  });
+  const [statementVendor, setStatementVendor] = useState<Vendor | null>(null);
+  const [ratingVendor, setRatingVendor] = useState<{ vendor: Vendor; breakdown: VendorRatingBreakdown } | null>(null);
 
   const [vendorForm, setVendorForm] = useState({
     nameAr: '',
     nameEn: '',
     crNumber: '',
+    vatNumber: '',
     category: 'صيانة عامة',
+    city: 'الرياض',
+    contactPerson: '',
+    iban: '',
     phone: '',
     email: '',
   });
@@ -115,40 +109,6 @@ export function AccountingOwnersView() {
 
   const isOwner = currentUser.role === 'owner';
 
-  const handleCreateExpense = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const propertyId = expForm.propertyId || state.properties[0]?.id;
-    const res = await mutate(
-      'POST',
-      '/api/expenses',
-      {
-        ...expForm,
-        propertyId,
-        date: new Date().toISOString().slice(0, 10),
-      },
-      { offlineDescAr: `تسجيل مصروف ${expForm.amount} ${CURRENCY_META[expForm.currency].symbolAr}` }
-    );
-    if (res) {
-      pushToast('success', lang === 'ar' ? 'تم رفع المصروف وإرساله لسير الاعتماد' : 'Expense submitted for approval');
-      setShowAddExpense(false);
-    }
-  };
-
-  const handleExpenseDecision = async (expenseId: string, decision: 'approve' | 'reject') => {
-    const res = await mutate(
-      'POST',
-      `/api/expenses/${expenseId}/decision`,
-      {
-        decision,
-        reason: decision === 'reject' ? 'مرفوض لعدم مطابقة الفاتورة' : undefined,
-      },
-      { offlineDescAr: decision === 'approve' ? 'اعتماد مصروف' : 'رفض مصروف' }
-    );
-    if (res) {
-      pushToast('success', decision === 'approve' ? 'تم تحديث حالة الاعتماد وترحيل القيد عند الاكتمال' : 'تم رفض المصروف');
-    }
-  };
-
   const handleCreateVendor = async (e: React.FormEvent) => {
     e.preventDefault();
     const res = await mutate(
@@ -158,8 +118,37 @@ export function AccountingOwnersView() {
       { offlineDescAr: `إضافة المورد ${vendorForm.nameAr}` }
     );
     if (res) {
+      triggerHaptic('success');
       pushToast('success', lang === 'ar' ? 'تمت إضافة المقاول بنجاح' : 'Vendor added');
       setShowAddVendor(false);
+      setVendorForm({
+        nameAr: '',
+        nameEn: '',
+        crNumber: '',
+        vatNumber: '',
+        category: 'صيانة عامة',
+        city: 'الرياض',
+        contactPerson: '',
+        iban: '',
+        phone: '',
+        email: '',
+      });
+    }
+  };
+
+  const handleSubmitVendorRating = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ratingVendor) return;
+    const res = await mutate(
+      'PATCH',
+      `/api/vendors/${ratingVendor.vendor.id}`,
+      { ratingBreakdown: ratingVendor.breakdown },
+      { offlineDescAr: `تحديث تقييم المورد ${ratingVendor.vendor.nameAr}` }
+    );
+    if (res) {
+      triggerHaptic('success');
+      pushToast('success', lang === 'ar' ? 'تم تحديث تقييم أداء المورد بنجاح' : 'Vendor rating updated');
+      setRatingVendor(null);
     }
   };
 
@@ -274,18 +263,11 @@ export function AccountingOwnersView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <PrintViewButton
-            labelAr={tab === 'owners' ? 'طباعة كشوف الملاك' : 'طباعة'}
-            labelEn={tab === 'owners' ? 'Print Statements' : 'Print'}
-          />
-          {tab === 'expenses' && hasPermission('create_expense') && (
-            <button
-              onClick={() => setShowAddExpense(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{lang === 'ar' ? 'تسجيل مصروف وفاتورة' : 'New Expense'}</span>
-            </button>
+          {tab !== 'expenses' && (
+            <PrintViewButton
+              labelAr={tab === 'owners' ? 'طباعة كشوف الملاك' : 'طباعة'}
+              labelEn={tab === 'owners' ? 'Print Statements' : 'Print'}
+            />
           )}
           {tab === 'vendors' && hasPermission('manage_maintenance') && (
             <>
@@ -308,93 +290,8 @@ export function AccountingOwnersView() {
         </div>
       </div>
 
-      {/* Tab 1: Expenses & Multi-stage Approval */}
-      {tab === 'expenses' && (
-        <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-x-auto">
-          <table className="w-full text-start text-xs">
-            <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-white/10">
-              <tr>
-                <th className="py-3 px-4 text-start font-medium">رقم المصروف / الفاتورة</th>
-                <th className="py-3 px-4 text-start font-medium">التصنيف والعقار</th>
-                <th className="py-3 px-4 text-start font-medium">المتحمل</th>
-                <th className="py-3 px-4 text-start font-medium">المبلغ</th>
-                <th className="py-3 px-4 text-start font-medium">حالة الاعتماد</th>
-                <th className="py-3 px-4 text-start font-medium">الإجراء</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-white/5">
-              {state.expenses.map((exp) => {
-                const prop = state.properties.find((p) => p.id === exp.propertyId);
-                const canAct =
-                  (exp.approvalStatus === 'بانتظار المشرف' && hasPermission('approve_expense_supervisor')) ||
-                  (exp.approvalStatus === 'بانتظار المدير' && hasPermission('approve_expense_manager'));
-                const isSelf = exp.createdBy === currentUser.id && currentUser.role !== 'gm';
-
-                return (
-                  <tr key={exp.id} className="hover:bg-slate-50 dark:hover:bg-white/[0.02]">
-                    <td className="py-3 px-4">
-                      <div className="font-mono-num font-semibold">{exp.expenseNumber}</div>
-                      <div className="text-[11px] text-slate-500 font-mono-num">
-                        {exp.invoiceNumber} · {exp.date}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="font-medium">{exp.category} · {prop?.nameAr}</div>
-                      <div className="text-[11px] text-slate-500 truncate max-w-xs">{exp.notes}</div>
-                    </td>
-                    <td className="py-3 px-4">{exp.bearer}</td>
-                    <td className="py-3 px-4 font-mono-num">
-                      <div className="font-bold">{formatInCurrency(exp.amount, exp.currency || 'SAR')}</div>
-                      {(exp.currency || 'SAR') !== baseCurrency && (
-                        <div className="text-[11px] text-slate-500">
-                          ≈ {formatConvertedBase(exp.amount, exp.currency || 'SAR')}
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`font-semibold ${
-                          exp.approvalStatus === 'معتمد'
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : exp.approvalStatus === 'مرفوض'
-                            ? 'text-red-600 dark:text-red-400'
-                            : 'text-amber-600 dark:text-amber-400'
-                        }`}
-                      >
-                        {exp.approvalStatus}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      {canAct && !isSelf ? (
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => handleExpenseDecision(exp.id, 'approve')}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
-                          >
-                            <CheckCircle2 className="w-3 h-3" />
-                            <span>اعتماد</span>
-                          </button>
-                          <button
-                            onClick={() => handleExpenseDecision(exp.id, 'reject')}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-red-300 dark:border-red-500/30 text-red-600 dark:text-red-400 text-[11px] cursor-pointer"
-                          >
-                            <XCircle className="w-3 h-3" />
-                            <span>رفض</span>
-                          </button>
-                        </div>
-                      ) : isSelf && (exp.approvalStatus === 'بانتظار المشرف' || exp.approvalStatus === 'بانتظار المدير') ? (
-                        <span className="text-[11px] text-slate-400">فصل مهام (لا يعتمد المنشئ)</span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Tab 1: Expenses & Supplier Invoices Center */}
+      {tab === 'expenses' && <ExpensesInvoicesCenterView />}
 
       {/* Tab 2: Owners & Statements */}
       {tab === 'owners' && (
@@ -685,21 +582,99 @@ export function AccountingOwnersView() {
       {/* Tab 4: Vendors & Purchase Orders / Quote Comparison */}
       {tab === 'vendors' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {state.vendors.map((v) => (
-              <div key={v.id} className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-2">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-bold">{v.nameAr}</div>
-                    <div className="text-[11px] text-slate-500">{v.category} · سجل {v.crNumber}</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {state.vendors.map((v) => {
+              const vendorExpenses = state.expenses.filter((e) => e.vendorId === v.id && e.approvalStatus !== 'ملغى');
+              const vendorInvoices = (state.supplierInvoices || []).filter((inv) => inv.vendorId === v.id && inv.status !== 'ملغاة');
+              const totalVolumeBase =
+                vendorExpenses.reduce((s, e) => s + convertToBase(e.amount, e.currency || 'SAR'), 0) +
+                vendorInvoices.reduce((s, i) => s + convertToBase(i.totalAmount, i.currency || 'SAR'), 0);
+
+              return (
+                <div key={v.id} className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3 flex flex-col justify-between">
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-bold">{v.nameAr}</div>
+                        <div className="text-[11px] text-slate-500">
+                          {v.category} · سجل <span className="font-mono-num">{v.crNumber}</span>
+                        </div>
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-500 font-mono-num text-xs font-bold">
+                        <Star className="w-3 h-3 fill-amber-500" />
+                        <span>{v.rating}/5</span>
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                      <div className="inline-flex items-center gap-1 font-mono-num truncate">
+                        <Phone className="w-3 h-3 shrink-0" />
+                        <span>{v.phone}</span>
+                      </div>
+                      <div className="inline-flex items-center gap-1 font-mono-num truncate">
+                        <Mail className="w-3 h-3 shrink-0" />
+                        <span>{v.email || '—'}</span>
+                      </div>
+                      {v.vatNumber && (
+                        <div className="col-span-2 font-mono-num text-[10px]">
+                          الرقم الضريبي: {v.vatNumber}
+                        </div>
+                      )}
+                      {v.iban && (
+                        <div className="col-span-2 inline-flex items-center gap-1 font-mono-num text-[10px] truncate">
+                          <CreditCard className="w-3 h-3 shrink-0" />
+                          <span>{v.iban}</span>
+                        </div>
+                      )}
+                      {(v.city || v.contactPerson) && (
+                        <div className="col-span-2 inline-flex items-center gap-1 text-[10px]">
+                          <Building2 className="w-3 h-3 shrink-0" />
+                          <span>{[v.city, v.contactPerson].filter(Boolean).join(' · ')}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl bg-slate-100/80 dark:bg-white/[0.04] px-3 py-2 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-500">إجمالي التعاملات ({vendorExpenses.length + vendorInvoices.length}):</span>
+                      <span className="font-mono-num font-bold text-[#26478D] dark:text-blue-300">
+                        {formatCurrency(totalVolumeBase, baseCurrency, lang)}
+                      </span>
+                    </div>
                   </div>
-                  <span className="font-mono-num text-xs font-semibold text-amber-500">{v.rating}/5</span>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200/70 dark:border-white/10 no-print">
+                    <button
+                      type="button"
+                      onClick={() => setStatementVendor(v)}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#26478D] hover:bg-[#1e3a75] text-white text-[11px] font-semibold cursor-pointer"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'كشف حساب وأعمال المورد' : 'Statement & History'}</span>
+                    </button>
+                    {hasPermission('manage_maintenance') && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setRatingVendor({
+                            vendor: v,
+                            breakdown: v.ratingBreakdown || {
+                              quality: Math.round(v.rating) || 5,
+                              punctuality: Math.round(v.rating) || 5,
+                              pricing: Math.round(v.rating) || 5,
+                              cooperation: Math.round(v.rating) || 5,
+                            },
+                          })
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-amber-400/30 bg-amber-500/10 text-amber-600 dark:text-amber-300 text-[11px] font-semibold cursor-pointer"
+                      >
+                        <Star className="w-3.5 h-3.5" />
+                        <span>{lang === 'ar' ? 'تقييم' : 'Rate'}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <div className="text-xs text-slate-500 font-mono-num">
-                  {v.phone} · {v.email}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-hidden">
@@ -792,119 +767,12 @@ export function AccountingOwnersView() {
         </div>
       )}
 
-      {/* Add Expense Modal */}
-      {showAddExpense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
-          <form
-            onSubmit={handleCreateExpense}
-            className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-4"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold">تسجيل مصروف وفاتورة مورد</h3>
-              <button type="button" onClick={() => setShowAddExpense(false)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <select
-                value={expForm.category}
-                onChange={(e) => setExpForm({ ...expForm, category: e.target.value as ExpenseCategory })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                <option value="صيانة">صيانة</option>
-                <option value="نظافة">نظافة</option>
-                <option value="كهرباء">كهرباء</option>
-                <option value="مياه">مياه</option>
-                <option value="تشغيل عام">تشغيل عام</option>
-              </select>
-              <select
-                value={expForm.propertyId || state.properties[0]?.id}
-                onChange={(e) => setExpForm({ ...expForm, propertyId: e.target.value })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                {state.properties.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nameAr}
-                  </option>
-                ))}
-              </select>
-              <input
-                required
-                placeholder="رقم الفاتورة (لمنع التكرار)"
-                value={expForm.invoiceNumber}
-                onChange={(e) => setExpForm({ ...expForm, invoiceNumber: e.target.value })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
-              />
-              <input
-                type="number"
-                required
-                min={1}
-                placeholder="المبلغ"
-                value={expForm.amount}
-                onChange={(e) => setExpForm({ ...expForm, amount: Number(e.target.value) })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
-              />
-              <select
-                value={expForm.currency}
-                onChange={(e) => setExpForm({ ...expForm, currency: e.target.value as CurrencyCode })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                {(Object.keys(CURRENCY_META) as CurrencyCode[]).map((code) => (
-                  <option key={code} value={code}>
-                    {lang === 'ar' ? CURRENCY_META[code].labelAr : CURRENCY_META[code].labelEn}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={expForm.bearer}
-                onChange={(e) => setExpForm({ ...expForm, bearer: e.target.value as typeof expForm.bearer })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                <option value="المالك">يتحمله المالك</option>
-                <option value="الشركة">على حساب الشركة</option>
-                <option value="المستأجر">يتحمله المستأجر</option>
-              </select>
-              <select
-                value={expForm.vendorId}
-                onChange={(e) => setExpForm({ ...expForm, vendorId: e.target.value })}
-                className="col-span-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                <option value="">بدون مورد محدد</option>
-                {state.vendors.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.nameAr}
-                  </option>
-                ))}
-              </select>
-              <textarea
-                rows={2}
-                placeholder="بيان المصروف والملاحظات"
-                value={expForm.notes}
-                onChange={(e) => setExpForm({ ...expForm, notes: e.target.value })}
-                className="col-span-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
-              />
-            </div>
-            <p className="text-[11px] text-slate-500">
-              حد اعتماد المشرف: {formatConvertedBase(state.settings.supervisorApprovalThreshold, 'SAR')} — أي مبلغ أعلى يحال تلقائياً لاعتماد المدير العام.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setShowAddExpense(false)} className="px-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-white/10 cursor-pointer">
-                إلغاء
-              </button>
-              <button type="submit" className="px-4 py-2 text-xs font-semibold rounded-lg bg-[#26478D] text-white cursor-pointer">
-                رفع للاعتماد
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
       {/* Add Vendor Modal */}
       {showAddVendor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
           <form
             onSubmit={handleCreateVendor}
-            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-4"
+            className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-4"
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">إضافة مورد / مقاول صيانة</h3>
@@ -912,34 +780,64 @@ export function AccountingOwnersView() {
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="space-y-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <input
                 required
-                placeholder="اسم المؤسسة أو المقاول"
+                placeholder="اسم المؤسسة أو المقاول *"
                 value={vendorForm.nameAr}
                 onChange={(e) => setVendorForm({ ...vendorForm, nameAr: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+                className="sm:col-span-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
               />
               <input
                 required
-                placeholder="رقم السجل التجاري"
+                placeholder="رقم السجل التجاري *"
                 value={vendorForm.crNumber}
                 onChange={(e) => setVendorForm({ ...vendorForm, crNumber: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+              />
+              <input
+                placeholder="الرقم الضريبي (15 خانة)"
+                value={vendorForm.vatNumber}
+                onChange={(e) => setVendorForm({ ...vendorForm, vatNumber: e.target.value })}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
               />
               <input
                 required
                 placeholder="التخصص (تكييف، سباكة، كهرباء...)"
                 value={vendorForm.category}
                 onChange={(e) => setVendorForm({ ...vendorForm, category: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+              />
+              <input
+                placeholder="المدينة"
+                value={vendorForm.city}
+                onChange={(e) => setVendorForm({ ...vendorForm, city: e.target.value })}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
               />
               <input
                 required
-                placeholder="رقم الجوال"
+                placeholder="رقم الجوال *"
                 value={vendorForm.phone}
                 onChange={(e) => setVendorForm({ ...vendorForm, phone: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+              />
+              <input
+                placeholder="البريد الإلكتروني"
+                value={vendorForm.email}
+                onChange={(e) => setVendorForm({ ...vendorForm, email: e.target.value })}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+              />
+              <input
+                placeholder="اسم المسؤول / المندوب"
+                value={vendorForm.contactPerson}
+                onChange={(e) => setVendorForm({ ...vendorForm, contactPerson: e.target.value })}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+              />
+              <input
+                placeholder="رقم الآيبان البنكي (SA...)"
+                value={vendorForm.iban}
+                onChange={(e) => setVendorForm({ ...vendorForm, iban: e.target.value })}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
               />
             </div>
             <div className="flex justify-end gap-2">
@@ -953,6 +851,200 @@ export function AccountingOwnersView() {
           </form>
         </div>
       )}
+
+      {/* Vendor 4-Criteria Rating Modal */}
+      {ratingVendor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+          <form
+            onSubmit={handleSubmitVendorRating}
+            className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold">
+                {lang === 'ar' ? `تقييم أداء المورد: ${ratingVendor.vendor.nameAr}` : `Rate Vendor: ${ratingVendor.vendor.nameEn}`}
+              </h3>
+              <button type="button" onClick={() => setRatingVendor(null)} className="cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-3 text-xs">
+              {[
+                { key: 'quality' as const, labelAr: 'جودة التنفيذ والمواد' },
+                { key: 'punctuality' as const, labelAr: 'الالتزام بالمواعيد والسرعة' },
+                { key: 'pricing' as const, labelAr: 'عدالة الأسعار ومطابقة الفواتير' },
+                { key: 'cooperation' as const, labelAr: 'التعاون والضمان ما بعد الخدمة' },
+              ].map((crit) => {
+                const val = ratingVendor.breakdown[crit.key];
+                return (
+                  <div key={crit.key} className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-white/[0.04]">
+                    <span className="font-semibold">{crit.labelAr}</span>
+                    <div className="flex items-center gap-1">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() =>
+                            setRatingVendor({
+                              ...ratingVendor,
+                              breakdown: { ...ratingVendor.breakdown, [crit.key]: star },
+                            })
+                          }
+                          className="cursor-pointer p-0.5"
+                        >
+                          <Star
+                            className={`w-4 h-4 ${star <= val ? 'text-amber-500 fill-amber-500' : 'text-slate-300 dark:text-slate-600'}`}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-200 dark:border-white/10">
+              <span>المتوسط العام:</span>
+              <span className="font-mono-num font-bold text-amber-500 text-sm">
+                {(
+                  (ratingVendor.breakdown.quality +
+                    ratingVendor.breakdown.punctuality +
+                    ratingVendor.breakdown.pricing +
+                    ratingVendor.breakdown.cooperation) /
+                  4
+                ).toFixed(1)}
+                /5
+              </span>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setRatingVendor(null)} className="px-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-white/10 cursor-pointer">
+                إلغاء
+              </button>
+              <button type="submit" className="px-4 py-2 text-xs font-semibold rounded-lg bg-[#26478D] text-white cursor-pointer">
+                حفظ التقييم
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Supplier Work History & Statement Drawer */}
+      {statementVendor && (() => {
+        const vExpenses = state.expenses.filter((e) => e.vendorId === statementVendor.id);
+        const vInvoices = (state.supplierInvoices || []).filter((i) => i.vendorId === statementVendor.id);
+        const vTickets = state.tickets.filter((t) => t.vendorId === statementVendor.id);
+        const vPos = (state.purchaseOrders || []).filter((po) => po.selectedVendorId === statementVendor.id);
+
+        const totalPaidSar =
+          vExpenses.filter((e) => e.approvalStatus !== 'ملغى').reduce((s, e) => s + convertToBase(e.paidAmount ?? (e.paymentStatus === 'مدفوع بالكامل' ? e.amount : 0), e.currency || 'SAR'), 0) +
+          vInvoices.filter((i) => i.status !== 'ملغاة').reduce((s, i) => s + convertToBase(i.paidAmount, i.currency || 'SAR'), 0);
+
+        const totalRemSar =
+          vExpenses.filter((e) => e.approvalStatus !== 'ملغى').reduce((s, e) => s + convertToBase(e.remainingAmount ?? 0, e.currency || 'SAR'), 0) +
+          vInvoices.filter((i) => i.status !== 'ملغاة').reduce((s, i) => s + convertToBase(i.remainingAmount, i.currency || 'SAR'), 0);
+
+        return (
+          <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/70 backdrop-blur-sm">
+            <div className="w-full max-w-2xl h-full overflow-y-auto bg-white dark:bg-[#0D1322] border-s border-slate-200 dark:border-white/10 p-6 space-y-5">
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 dark:border-white/10 pb-4">
+                <div>
+                  <div className="text-xs text-slate-500 font-mono-num">
+                    سجل {statementVendor.crNumber} {statementVendor.vatNumber ? `· ضريبي ${statementVendor.vatNumber}` : ''}
+                  </div>
+                  <h3 className="text-lg font-bold mt-0.5">{statementVendor.nameAr}</h3>
+                  <div className="text-xs text-slate-500">
+                    {statementVendor.category} · {statementVendor.city || 'الرياض'} · {statementVendor.phone}
+                  </div>
+                </div>
+                <button type="button" onClick={() => setStatementVendor(null)} className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                  <div className="text-slate-500 dark:text-slate-400">إجمالي المدفوع للمورد</div>
+                  <div className="text-base font-bold font-mono-num text-emerald-600 dark:text-emerald-400 mt-1">
+                    {formatCurrency(totalPaidSar, baseCurrency, lang)}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                  <div className="text-slate-500 dark:text-slate-400">المتبقي المستحق</div>
+                  <div className="text-base font-bold font-mono-num text-amber-600 dark:text-amber-400 mt-1">
+                    {formatCurrency(totalRemSar, baseCurrency, lang)}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
+                  <div className="text-slate-500 dark:text-slate-400">تذاكر وأوامر شراء</div>
+                  <div className="text-base font-bold font-mono-num text-[#26478D] dark:text-blue-300 mt-1">
+                    {vTickets.length} تذكرة · {vPos.length} PO
+                  </div>
+                </div>
+              </div>
+
+              {statementVendor.ratingBreakdown && (
+                <div className="grid grid-cols-4 gap-2 text-[11px] p-3 rounded-xl bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10">
+                  <div>الجودة: <strong className="font-mono-num text-amber-500">{statementVendor.ratingBreakdown.quality}/5</strong></div>
+                  <div>الالتزام: <strong className="font-mono-num text-amber-500">{statementVendor.ratingBreakdown.punctuality}/5</strong></div>
+                  <div>الأسعار: <strong className="font-mono-num text-amber-500">{statementVendor.ratingBreakdown.pricing}/5</strong></div>
+                  <div>التعاون: <strong className="font-mono-num text-amber-500">{statementVendor.ratingBreakdown.cooperation}/5</strong></div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold">سجل المصروفات وفواتير المورد ({vExpenses.length + vInvoices.length})</h4>
+                <div className="divide-y divide-slate-100 dark:divide-white/5 rounded-xl border border-slate-200 dark:border-white/10 text-xs">
+                  {vExpenses.map((e) => (
+                    <div key={e.id} className="p-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-mono-num font-semibold">{e.expenseNumber} · {e.invoiceNumber}</div>
+                        <div className="text-[11px] text-slate-500">{e.category} · {e.date} · {e.approvalStatus}</div>
+                      </div>
+                      <div className="text-end font-mono-num">
+                        <div className="font-bold">{formatInCurrency(e.amount, e.currency || 'SAR')}</div>
+                        <div className="text-[10px] text-slate-400">{e.paymentStatus || '—'}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {vInvoices.map((inv) => (
+                    <div key={inv.id} className="p-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-mono-num font-semibold">{inv.invoiceCode} · {inv.supplierInvoiceNumber}</div>
+                        <div className="text-[11px] text-slate-500">{inv.invoiceDate} · {inv.status}</div>
+                      </div>
+                      <div className="text-end font-mono-num">
+                        <div className="font-bold">{formatInCurrency(inv.totalAmount, inv.currency)}</div>
+                        <div className="text-[10px] text-amber-500">متبقي: {inv.remainingAmount.toLocaleString()}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {vExpenses.length === 0 && vInvoices.length === 0 && (
+                    <div className="p-4 text-center text-slate-400">لا توجد معاملات مسجلة لهذا المورد حتى الآن.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold">تذاكر الصيانة وأعمال المورد ({vTickets.length})</h4>
+                <div className="divide-y divide-slate-100 dark:divide-white/5 rounded-xl border border-slate-200 dark:border-white/10 text-xs">
+                  {vTickets.map((t) => (
+                    <div key={t.id} className="p-3 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-semibold">{t.ticketNumber} · {t.title}</div>
+                        <div className="text-[11px] text-slate-500">{t.category} · {t.status}</div>
+                      </div>
+                      <div className="font-mono-num font-bold">
+                        {formatConvertedBase(t.actualCost || t.estimatedCost, 'SAR')}
+                      </div>
+                    </div>
+                  ))}
+                  {vTickets.length === 0 && (
+                    <div className="p-4 text-center text-slate-400">لا توجد تذاكر صيانة مسندة لهذا المورد.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Owner Payout Transfer Modal */}
       {transferOwner && (
@@ -978,19 +1070,11 @@ export function AccountingOwnersView() {
                 value={transferForm.amount}
                 onChange={(e) => setTransferForm({ ...transferForm, amount: Number(e.target.value) })}
                 className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
-                placeholder="المبلغ"
+                placeholder="المبلغ (ريال سعودي)"
               />
-              <select
-                value={transferForm.currency}
-                onChange={(e) => setTransferForm({ ...transferForm, currency: e.target.value as CurrencyCode })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                {(Object.keys(CURRENCY_META) as CurrencyCode[]).map((code) => (
-                  <option key={code} value={code}>
-                    {CURRENCY_META[code].labelAr}
-                  </option>
-                ))}
-              </select>
+              <div className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.04] flex items-center font-semibold text-emerald-600 dark:text-emerald-400">
+                ريال سعودي (SAR)
+              </div>
               <select
                 value={transferForm.paymentMethod}
                 onChange={(e) => setTransferForm({ ...transferForm, paymentMethod: e.target.value as PaymentMethod })}
@@ -1058,17 +1142,9 @@ export function AccountingOwnersView() {
                   </option>
                 ))}
               </select>
-              <select
-                value={poForm.currency}
-                onChange={(e) => setPoForm({ ...poForm, currency: e.target.value as CurrencyCode })}
-                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
-              >
-                {(Object.keys(CURRENCY_META) as CurrencyCode[]).map((code) => (
-                  <option key={code} value={code}>
-                    {CURRENCY_META[code].labelAr}
-                  </option>
-                ))}
-              </select>
+              <div className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.04] flex items-center font-semibold text-emerald-600 dark:text-emerald-400">
+                العملة: ريال سعودي (SAR)
+              </div>
               <select
                 value={poForm.vendor1Id || state.vendors[0]?.id}
                 onChange={(e) => setPoForm({ ...poForm, vendor1Id: e.target.value })}

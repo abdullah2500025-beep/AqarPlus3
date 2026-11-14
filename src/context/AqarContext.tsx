@@ -11,6 +11,7 @@ import {
   DEFAULT_CURRENCY_RATES_TO_SAR,
   formatCurrency,
 } from '../utils/formatters';
+import { SyncBatchUploadResult, SyncEngine } from '../utils/syncEngine';
 
 export interface ActiveSessionInfo {
   sessionId?: string;
@@ -74,6 +75,9 @@ interface AqarContextValue {
   convertToBase: (amount: number, fromCurrency?: CurrencyCode) => number;
   formatInCurrency: (amount: number, currency?: CurrencyCode) => string;
   formatConvertedBase: (amount: number, fromCurrency?: CurrencyCode) => string;
+  tenantsTabHint: 'tenants' | 'leads' | 'reports';
+  setTenantsTabHint: (tab: 'tenants' | 'leads' | 'reports') => void;
+  openLeadsHub: () => void;
   activeCompanyId: string;
   setActiveCompanyId: (companyId: string) => void;
   wsStatus: 'connected' | 'connecting' | 'offline';
@@ -82,6 +86,9 @@ interface AqarContextValue {
   toggleOfflineSimulation: () => void;
   offlineQueue: OfflineQueuedAction[];
   syncOfflineQueue: () => Promise<void>;
+  runFullSync: () => Promise<SyncBatchUploadResult | null>;
+  lastSyncAt: string | null;
+  lastSyncResult: SyncBatchUploadResult | null;
   pendingMutationsCount: number;
   presence: ActiveSessionInfo[];
   toasts: ToastMessage[];
@@ -135,11 +142,10 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<'dark' | 'light'>(
     () => (localStorage.getItem(THEME_STORAGE_KEY) as 'dark' | 'light') || 'dark'
   );
-  const [baseCurrency, setBaseCurrencyState] = useState<CurrencyCode>(
-    () => (localStorage.getItem(BASE_CURRENCY_STORAGE_KEY) as CurrencyCode) || 'SAR'
-  );
+  const baseCurrency: CurrencyCode = 'SAR';
   const [activeCompanyId, setActiveCompanyId] = useState<string>('all');
   const [activeNav, setActiveNavState] = useState<PrimaryNavSection>('dashboard');
+  const [tenantsTabHint, setTenantsTabHint] = useState<'tenants' | 'leads' | 'reports'>('tenants');
   const [leasingFinanceTab, setLeasingFinanceTab] = useState<LeasingFinanceTab>('leasing');
   const [leasingWizardUnitId, setLeasingWizardUnitId] = useState<string | null>(null);
   const [onboardingConfig, setOnboardingConfig] = useState<{
@@ -181,8 +187,15 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     setLeasingFinanceTab('leasing');
     setActiveNavState('leasing_finance');
   }, []);
+
+  const openLeadsHub = useCallback(() => {
+    setTenantsTabHint('leads');
+    setActiveNavState('tenants');
+  }, []);
   const [wsStatus, setWsStatus] = useState<'connected' | 'connecting' | 'offline'>('connecting');
   const [isOfflineSimulated, setIsOfflineSimulated] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [lastSyncResult, setLastSyncResult] = useState<SyncBatchUploadResult | null>(null);
   const [presence, setPresence] = useState<ActiveSessionInfo[]>([]);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [offlineQueue, setOfflineQueue] = useState<OfflineQueuedAction[]>(() => {
@@ -254,9 +267,8 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     setLangState(next);
   }, []);
 
-  const setBaseCurrency = useCallback((next: CurrencyCode) => {
-    setBaseCurrencyState(next);
-    localStorage.setItem(BASE_CURRENCY_STORAGE_KEY, next);
+  const setBaseCurrency = useCallback((_next: CurrencyCode) => {
+    localStorage.removeItem(BASE_CURRENCY_STORAGE_KEY);
   }, []);
 
   const currencyRates = useMemo<Record<CurrencyCode, number>>(
@@ -433,44 +445,62 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
 
   const syncOfflineQueue = useCallback(async () => {
     if (offlineQueue.length === 0 || isOfflineSimulated) return;
-    const remaining: OfflineQueuedAction[] = [];
-    let syncedCount = 0;
-
-    for (const action of offlineQueue) {
-      try {
-        const res = await fetch(action.endpoint, {
-          method: action.method,
-          headers: {
-            'Content-Type': 'application/json',
-            'x-user-id': action.userId,
-            'x-device-name': encodeURIComponent(action.deviceName),
-            'x-idempotency-key': action.idempotencyKey,
-          },
-          body: action.body ? JSON.stringify(action.body) : undefined,
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          pushToast('error', `تعذر مزامنة (${action.descriptionAr}): ${data.error || 'خطأ'}`);
-        } else {
-          syncedCount += 1;
-          if (data.state) cacheStateSnapshot(data.state);
-        }
-      } catch {
-        remaining.push(action);
+    try {
+      const result = await SyncEngine.uploadPendingOperations(offlineQueue, state?.lastUpdatedAt);
+      setLastSyncAt(result.syncedAt);
+      setLastSyncResult(result);
+      if (result.state) cacheStateSnapshot(result.state);
+      if (result.errors.length === 0) {
+        setOfflineQueue([]);
+      } else {
+        pushToast('error', result.errors[0]);
       }
+      if (result.uploaded > 0) {
+        pushToast(
+          'success',
+          lang === 'ar'
+            ? `تمت مزامنة ${result.uploaded} عملية عبر Sync Engine${result.conflictsDetected > 0 ? ` (${result.conflictsDetected} تعارض)` : ''}`
+            : `Synced ${result.uploaded} offline operations`
+        );
+      } else if (result.skippedDuplicates > 0) {
+        setOfflineQueue([]);
+      }
+      await fetchState(activeUserIdRef.current);
+    } catch {
+      // keep queued items for retry
     }
+  }, [offlineQueue, isOfflineSimulated, state?.lastUpdatedAt, lang, pushToast, fetchState, cacheStateSnapshot]);
 
-    setOfflineQueue(remaining);
-    if (syncedCount > 0) {
+  const runFullSync = useCallback(async (): Promise<SyncBatchUploadResult | null> => {
+    if (isOfflineSimulated) {
+      pushToast('error', lang === 'ar' ? 'لا يمكن المزامنة أثناء وضع عدم الاتصال المحاكى' : 'Disable offline mode first');
+      return null;
+    }
+    try {
+      const uploadResult = await SyncEngine.uploadPendingOperations(offlineQueue, state?.lastUpdatedAt);
+      if (uploadResult.errors.length === 0 && offlineQueue.length > 0) {
+        setOfflineQueue([]);
+      }
+      const delta = await SyncEngine.fetchDelta(activeUserIdRef.current, lastSyncAt || undefined);
+      if (delta.state) {
+        cacheStateSnapshot(delta.state);
+      } else if (uploadResult.state) {
+        cacheStateSnapshot(uploadResult.state);
+      }
+      setLastSyncAt(uploadResult.syncedAt);
+      setLastSyncResult(uploadResult);
       pushToast(
         'success',
         lang === 'ar'
-          ? `تمت مزامنة ${syncedCount} عملية مسجلة دون إنترنت بنجاح دون تكرار`
-          : `Synced ${syncedCount} offline actions idempotently`
+          ? `اكتملت المزامنة (الإصدار #${delta.serverRevision} · مرفوع: ${uploadResult.uploaded} · تعارضات معلقة: ${delta.pendingConflictsCount})`
+          : `Sync completed (rev #${delta.serverRevision})`
       );
-      await fetchState(activeUserIdRef.current);
+      return uploadResult;
+    } catch (err) {
+      pushToast('error', (err as Error).message);
+      return null;
     }
-  }, [offlineQueue, isOfflineSimulated, lang, pushToast, fetchState, cacheStateSnapshot]);
+  }, [isOfflineSimulated, offlineQueue, state?.lastUpdatedAt, lastSyncAt, lang, pushToast, cacheStateSnapshot]);
 
   const toggleOfflineSimulation = useCallback(() => {
     setIsOfflineSimulated((prev) => {
@@ -593,6 +623,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       convertToBase,
       formatInCurrency,
       formatConvertedBase,
+      tenantsTabHint,
+      setTenantsTabHint,
+      openLeadsHub,
       activeCompanyId,
       setActiveCompanyId,
       wsStatus,
@@ -601,6 +634,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       toggleOfflineSimulation,
       offlineQueue,
       syncOfflineQueue,
+      runFullSync,
+      lastSyncAt,
+      lastSyncResult,
       pendingMutationsCount,
       presence,
       toasts,
@@ -633,6 +669,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       convertToBase,
       formatInCurrency,
       formatConvertedBase,
+      tenantsTabHint,
+      setTenantsTabHint,
+      openLeadsHub,
       activeCompanyId,
       wsStatus,
       isBrowserOnline,
@@ -640,6 +679,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       toggleOfflineSimulation,
       offlineQueue,
       syncOfflineQueue,
+      runFullSync,
+      lastSyncAt,
+      lastSyncResult,
       pendingMutationsCount,
       presence,
       toasts,

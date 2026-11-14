@@ -4,9 +4,18 @@
 @layer base {
   :root {
     --aqar-primary: #26478D;
+    --aqar-primary-hover: #1E3A75;
     --aqar-secondary: #97A5BA;
     --aqar-dark-bg: #0A0E1A;
     --aqar-dark-alt: #1A1F2E;
+    --aqar-success: #10B981;
+    --aqar-warning: #F59E0B;
+    --aqar-error: #EF4444;
+    --aqar-info: #3B82F6;
+    --aqar-radius-sm: 8px;
+    --aqar-radius-md: 12px;
+    --aqar-radius-lg: 16px;
+    --aqar-radius-xl: 24px;
     font-family: 'IBM Plex Sans Arabic', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   }
 
