@@ -263,10 +263,10 @@ export function AccountingOwnersView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {tab !== 'expenses' && (
+          {tab === 'owners' && (
             <PrintViewButton
-              labelAr={tab === 'owners' ? 'طباعة كشوف الملاك' : 'طباعة'}
-              labelEn={tab === 'owners' ? 'Print Statements' : 'Print'}
+              labelAr="طباعة كشوف الملاك"
+              labelEn="Print Statements"
             />
           )}
           {tab === 'vendors' && hasPermission('manage_maintenance') && (

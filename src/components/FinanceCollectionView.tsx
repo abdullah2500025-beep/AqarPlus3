@@ -17,10 +17,9 @@ import {
 } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
 import { Installment, Payment, PaymentMethod, PaymentType } from '../types/aqar';
-import { formatCurrency, formatDateTime, formatGregorian } from '../utils/formatters';
+import { formatCurrency, formatDateTime, formatDisplayDate } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
 import { exportFinanceReportToExcel } from '../utils/excelExport';
-import { PrintViewButton } from './PrintViewButton';
 import { ReceiptModal } from './ReceiptModal';
 import { QrVerifyModal } from './QrVerifyModal';
 import { SwipeableRow } from './SwipeableRow';
@@ -316,8 +315,6 @@ export function FinanceCollectionView() {
             <span>{lang === 'ar' ? 'تصدير Excel للمراجعة' : 'Export Excel Report'}</span>
           </button>
 
-          <PrintViewButton />
-
           {hasPermission('collect_payments') && (
             <button
               onClick={() => openCollectModal()}
@@ -440,7 +437,7 @@ export function FinanceCollectionView() {
                       <div className="min-w-0">
                         <div className="text-sm font-bold truncate">{tenant?.nameAr || '—'}</div>
                         <div className="text-[11px] text-slate-500 font-mono-num">
-                          وحدة {unit?.unitNumber} · قسط #{inst.installmentNumber} · {formatGregorian(inst.dueDate, lang)}
+                          وحدة {unit?.unitNumber} · قسط #{inst.installmentNumber} · {formatDisplayDate(inst.dueDate, lang)}
                         </div>
                       </div>
                       <span
@@ -507,7 +504,7 @@ export function FinanceCollectionView() {
                           {unit?.unitNumber} · {contract?.internalNumber} · قسط #{inst.installmentNumber}
                         </div>
                       </td>
-                      <td className="py-3 px-4 font-mono-num">{formatGregorian(inst.dueDate, lang)}</td>
+                      <td className="py-3 px-4 font-mono-num">{formatDisplayDate(inst.dueDate, lang)}</td>
                       <td className="py-3 px-4 font-mono-num">
                         <div>{formatInCurrency(inst.amount, cur)}</div>
                         {showConverted && (

@@ -27,7 +27,6 @@ import { OcrExtractedData, Tenant, TenantTypeKind } from '../types/aqar';
 import { formatDateTime, formatSar } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
 import { buildWhatsAppHref } from '../utils/templateEngine';
-import { PrintViewButton } from './PrintViewButton';
 import { SwipeableRow } from './SwipeableRow';
 import { readFileAsDataUrl, runGeminiOcrExtraction } from '../utils/ocrClient';
 import { CameraDocumentScannerModal } from './CameraDocumentScannerModal';
@@ -371,7 +370,6 @@ export function TenantsCrmView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <PrintViewButton />
           {hasPermission('manage_tenants') && tab === 'tenants' && (
             <button
               type="button"

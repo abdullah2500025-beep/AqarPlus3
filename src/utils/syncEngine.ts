@@ -23,7 +23,9 @@ export interface SyncDeltaResponse {
 export class SyncEngine {
   static async uploadPendingOperations(
     queue: OfflineQueuedAction[],
-    baseLastUpdatedAt?: string
+    baseLastUpdatedAt?: string,
+    authToken?: string | null,
+    workspaceId = 'default'
   ): Promise<SyncBatchUploadResult> {
     if (queue.length === 0) {
       return {
@@ -37,15 +39,24 @@ export class SyncEngine {
       };
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-device-name': encodeURIComponent(queue[0].deviceName || 'Web Terminal'),
+      'x-workspace-id': workspaceId,
+    };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+
     const res = await fetch('/api/sync/batch', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': queue[0].userId,
-        'x-device-name': encodeURIComponent(queue[0].deviceName || 'Web Terminal'),
-      },
+      credentials: 'include',
+      headers,
       body: JSON.stringify({
-        operations: queue,
+        operations: queue.map((op) => ({
+          ...op,
+          operationId: op.operationId || op.idempotencyKey || op.id,
+        })),
         clientLastUpdatedAt: baseLastUpdatedAt,
       }),
     });
@@ -67,10 +78,21 @@ export class SyncEngine {
     };
   }
 
-  static async fetchDelta(userId: string, sinceIso?: string): Promise<SyncDeltaResponse> {
+  static async fetchDelta(
+    sinceIso?: string,
+    authToken?: string | null,
+    workspaceId = 'default'
+  ): Promise<SyncDeltaResponse> {
     const query = sinceIso ? `?since=${encodeURIComponent(sinceIso)}` : '';
+    const headers: Record<string, string> = {
+      'x-workspace-id': workspaceId,
+    };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
     const res = await fetch(`/api/sync/delta${query}`, {
-      headers: { 'x-user-id': userId },
+      credentials: 'include',
+      headers,
     });
     if (!res.ok) {
       throw new Error('Failed to fetch sync delta');

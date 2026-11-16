@@ -1,5 +1,65 @@
 import { CurrencyCode } from '../types/aqar';
 
+export interface DisplayFormatPrefs {
+  calendarType: 'gregorian' | 'hijri' | 'both';
+  dateFormat: 'DD/MM/YYYY' | 'YYYY-MM-DD';
+  numerals: 'en' | 'ar';
+}
+
+const DISPLAY_PREFS_KEY = 'aqarplus_display_prefs_v1';
+
+function readStoredDisplayPrefs(): DisplayFormatPrefs {
+  const defaults: DisplayFormatPrefs = {
+    calendarType: 'both',
+    dateFormat: 'DD/MM/YYYY',
+    numerals: 'en',
+  };
+  if (typeof window === 'undefined') return defaults;
+  try {
+    const raw = localStorage.getItem(DISPLAY_PREFS_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<DisplayFormatPrefs>;
+    return {
+      calendarType: parsed.calendarType === 'gregorian' || parsed.calendarType === 'hijri' || parsed.calendarType === 'both' ? parsed.calendarType : 'both',
+      dateFormat: parsed.dateFormat === 'YYYY-MM-DD' ? 'YYYY-MM-DD' : 'DD/MM/YYYY',
+      numerals: parsed.numerals === 'ar' ? 'ar' : 'en',
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+let activeDisplayPrefs: DisplayFormatPrefs = readStoredDisplayPrefs();
+
+export function getDisplayFormatPrefs(): DisplayFormatPrefs {
+  return activeDisplayPrefs;
+}
+
+export function setDisplayFormatPrefs(next: Partial<DisplayFormatPrefs>): DisplayFormatPrefs {
+  activeDisplayPrefs = {
+    ...activeDisplayPrefs,
+    ...next,
+  };
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(DISPLAY_PREFS_KEY, JSON.stringify(activeDisplayPrefs));
+    } catch {
+      // ignore storage errors
+    }
+  }
+  return activeDisplayPrefs;
+}
+
+const ARABIC_INDIC_DIGITS = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+
+export function localizeDigits(value: string | number, numerals: 'en' | 'ar' = activeDisplayPrefs.numerals): string {
+  const str = String(value ?? '');
+  if (numerals === 'ar') {
+    return str.replace(/\d/g, (d) => ARABIC_INDIC_DIGITS[Number(d)] ?? d);
+  }
+  return str.replace(/[٠-٩]/g, (d) => String(ARABIC_INDIC_DIGITS.indexOf(d)));
+}
+
 export const DEFAULT_CURRENCY_RATES_TO_SAR: Record<CurrencyCode, number> = {
   SAR: 1,
   AED: 1.021,
@@ -34,50 +94,112 @@ export function formatCurrency(amount: number, currency: CurrencyCode = 'SAR', l
     minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
     maximumFractionDigits: 2,
   }).format(amount);
+  const localized = localizeDigits(formatted, activeDisplayPrefs.numerals);
   const meta = CURRENCY_META[currency] || CURRENCY_META.SAR;
-  return lang === 'ar' ? `${formatted} ${meta.symbolAr}` : `${meta.symbolEn} ${formatted}`;
+  return lang === 'ar' ? `${localized} ${meta.symbolAr}` : `${meta.symbolEn} ${localized}`;
 }
 
 export function formatSar(amount: number, lang: 'ar' | 'en' = 'ar', currency: CurrencyCode = 'SAR'): string {
   return formatCurrency(amount, currency, lang);
 }
 
-export function formatGregorian(iso: string, lang: 'ar' | 'en' = 'ar'): string {
+function formatNumericParts(
+  year: string,
+  month: string,
+  day: string,
+  dateFormat: 'DD/MM/YYYY' | 'YYYY-MM-DD',
+  numerals: 'en' | 'ar'
+): string {
+  const raw = dateFormat === 'YYYY-MM-DD' ? `${year}-${month}-${day}` : `${day}/${month}/${year}`;
+  return localizeDigits(raw, numerals);
+}
+
+export function formatGregorian(
+  iso: string,
+  _lang: 'ar' | 'en' = 'ar',
+  overridePrefs?: Partial<DisplayFormatPrefs>
+): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat(lang === 'ar' ? 'ar-SA-u-nu-latn' : 'en-GB', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(d);
+  const prefs = { ...activeDisplayPrefs, ...overridePrefs };
+  const year = String(d.getFullYear());
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return formatNumericParts(year, month, day, prefs.dateFormat, prefs.numerals);
 }
 
-export function formatHijri(iso: string): string {
+export function formatHijri(iso: string, overridePrefs?: Partial<DisplayFormatPrefs> & { numeric?: boolean }): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
+  const prefs = { ...activeDisplayPrefs, ...overridePrefs };
   try {
-    return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura-nu-latn', {
+    if (overridePrefs?.numeric) {
+      const parts = new Intl.DateTimeFormat('en-u-ca-islamic-umalqura-nu-latn', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(d);
+      const y = parts.find((p) => p.type === 'year')?.value || '';
+      const m = parts.find((p) => p.type === 'month')?.value || '';
+      const day = parts.find((p) => p.type === 'day')?.value || '';
+      if (y && m && day) {
+        return `${formatNumericParts(y, m, day, prefs.dateFormat, prefs.numerals)} هـ`;
+      }
+    }
+    const text = new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura-nu-latn', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
     }).format(d);
+    return localizeDigits(text, prefs.numerals);
   } catch {
     return '';
   }
 }
 
-export function formatDateTime(iso: string, lang: 'ar' | 'en' = 'ar'): string {
+export function formatDisplayDate(
+  iso: string,
+  lang: 'ar' | 'en' = 'ar',
+  overridePrefs?: Partial<DisplayFormatPrefs> & { verboseHijri?: boolean }
+): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat(lang === 'ar' ? 'ar-SA-u-nu-latn' : 'en-GB', {
-    month: 'short',
-    day: 'numeric',
+  const prefs = { ...activeDisplayPrefs, ...overridePrefs };
+  const greg = formatGregorian(iso, lang, prefs);
+  const hijriText = formatHijri(iso, prefs);
+  const hijriNumeric = formatHijri(iso, { ...prefs, numeric: true });
+  const hijriStr = overridePrefs?.verboseHijri ? `${hijriText} (${hijriNumeric})` : hijriNumeric || hijriText;
+
+  if (prefs.calendarType === 'gregorian') {
+    return lang === 'ar' ? `${greg} م` : greg;
+  }
+  if (prefs.calendarType === 'hijri') {
+    return hijriStr || greg;
+  }
+  return lang === 'ar'
+    ? `${greg} م · ${overridePrefs?.verboseHijri ? hijriText : hijriNumeric || hijriText}`
+    : `${greg} · ${hijriNumeric || hijriText}`;
+}
+
+export function formatDateTime(
+  iso: string,
+  lang: 'ar' | 'en' = 'ar',
+  overridePrefs?: Partial<DisplayFormatPrefs>
+): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const prefs = { ...activeDisplayPrefs, ...overridePrefs };
+  const datePart = formatDisplayDate(iso, lang, prefs);
+  const timeRaw = new Intl.DateTimeFormat(lang === 'ar' ? 'ar-SA-u-nu-latn' : 'en-GB', {
     hour: '2-digit',
     minute: '2-digit',
   }).format(d);
+  const timePart = localizeDigits(timeRaw, prefs.numerals);
+  return `${datePart} · ${timePart}`;
 }
 
 export function numberToArabicWords(num: number): string {

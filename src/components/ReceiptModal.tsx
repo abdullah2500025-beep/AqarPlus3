@@ -18,7 +18,7 @@ interface ReceiptModalProps {
 }
 
 export function ReceiptModal({ payment, onClose }: ReceiptModalProps) {
-  const { state, lang, hasPermission, mutate, pushToast } = useAqar();
+  const { state, lang, hasPermission, mutate, pushToast, displayPrefs } = useAqar();
   const [reverseOpen, setReverseOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -268,8 +268,12 @@ export function ReceiptModal({ payment, onClose }: ReceiptModalProps) {
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 {lang === 'ar' ? 'التاريخ والوقت' : 'Date & Time'}
               </div>
-              <div className="text-xs font-medium mt-1 font-mono-num">{formatDateTime(payment.createdAt, lang)}</div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">{formatHijri(payment.createdAt)}</div>
+              <div className="text-xs font-medium mt-1 font-mono-num">{formatDateTime(payment.createdAt, lang, displayPrefs)}</div>
+              {displayPrefs.calendarType !== 'gregorian' && (
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono-num">
+                  {formatHijri(payment.createdAt, displayPrefs)}
+                </div>
+              )}
             </div>
           </div>
 

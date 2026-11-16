@@ -51,6 +51,7 @@ export type StaffStatusState = 'متصل' | 'مشغول' | 'غير متصل';
 export interface StaffSecurityConfig {
   twoFactorEnabled?: boolean;
   biometricEnabled?: boolean;
+  hasPin?: boolean;
   failedAttempts?: number;
   lockedUntil?: string;
   lastPasswordChangedAt?: string;
@@ -71,6 +72,7 @@ export interface StaffNotificationPrefs {
 
 export interface StaffUser {
   id: string;
+  companyId?: string;
   nameAr: string;
   nameEn: string;
   role: RoleKey;
@@ -974,6 +976,7 @@ export interface DocumentRecord {
   version: number;
   uploadedBy: string;
   dataUrl?: string;
+  diskPath?: string;
   ocrStatus?: 'لم يُحلل' | 'تم الاستخراج آلياً';
   ocrRawText?: string;
   ocrExtracted?: OcrExtractedData;
@@ -1110,6 +1113,63 @@ export interface BackupSnapshot {
   createdBy: string;
   recordCount: number;
   sizeKb: number;
+  encrypted?: boolean;
+}
+
+export interface BackupCollectionDiff {
+  added: number;
+  updated: number;
+  unchanged: number;
+}
+
+export interface BackupPreviewResult {
+  id: string;
+  exists: boolean;
+  encrypted?: boolean;
+  requiresPassword?: boolean;
+  decryptionError?: string;
+  propertiesCount: number;
+  unitsCount: number;
+  tenantsCount: number;
+  contractsCount: number;
+  paymentsCount: number;
+  templatesCount: number;
+  lastUpdatedAt?: string;
+  diff?: {
+    properties: BackupCollectionDiff;
+    units: BackupCollectionDiff;
+    tenants: BackupCollectionDiff;
+    contracts: BackupCollectionDiff;
+    payments: BackupCollectionDiff;
+    expenses: BackupCollectionDiff;
+    tickets: BackupCollectionDiff;
+    totalChanged: number;
+  };
+}
+
+export interface LoginProfileSummary {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  email: string;
+  role: RoleKey;
+  roleLabelAr: string;
+  roleLabelEn: string;
+  hasPin: boolean;
+}
+
+export interface AuthSessionInfo {
+  authenticated: boolean;
+  user?: StaffUser;
+  token?: string;
+  expiresAt?: string;
+  demoLoginEnabled?: boolean;
+  loginProfiles?: LoginProfileSummary[];
+  companyBranding?: {
+    nameAr: string;
+    nameEn: string;
+    logoDataUrl?: string;
+  };
 }
 
 export type ReminderChannel = 'بريد إلكتروني' | 'رسائل نصية SMS (محاكاة)' | 'واتساب';
@@ -1233,6 +1293,12 @@ export interface NotificationCenterConfig {
     maintenanceId?: string;
     contractId?: string;
   };
+  emailEnabled?: boolean;
+  emailAddress?: string;
+  emailReportTypes?: string[];
+  defaultWhatsappNumber?: string;
+  defaultSmsNumber?: string;
+  defaultEmailSender?: string;
 }
 
 export interface DiscoveredPrinter {
@@ -1259,6 +1325,8 @@ export interface BackupPolicyConfig {
   scheduledTime: string;
   storageTarget: 'device' | 'custom_folder' | 'nas' | 'cloud';
   customPath: string;
+  archivePath?: string;
+  documentsPath?: string;
   encryptBackups: boolean;
 }
 
@@ -1282,6 +1350,104 @@ export interface DeveloperErrorEntry {
 export interface DeveloperCenterConfig {
   tempCacheSizeKb: number;
   errorLogs: DeveloperErrorEntry[];
+}
+
+export interface HolidayEntry {
+  id: string;
+  nameAr: string;
+  date: string;
+  official: boolean;
+}
+
+export interface CalendarSettingsConfig {
+  calendarType: 'gregorian' | 'hijri' | 'both';
+  dateFormat: 'DD/MM/YYYY' | 'YYYY-MM-DD';
+  numerals: 'ar' | 'en';
+  weekStart: 'sat' | 'sun' | 'mon';
+  holidays: HolidayEntry[];
+  disableWorkOnHolidays: boolean;
+  workStart: string;
+  workEnd: string;
+  workDays: string[];
+  ramadanMode: boolean;
+  ramadanWorkStart: string;
+  ramadanWorkEnd: string;
+  rentAlertDays: number[];
+  contractAlertDays: number[];
+}
+
+export interface CustomFormFieldConfig {
+  id: string;
+  key: string;
+  labelAr: string;
+  labelEn: string;
+  type: 'text' | 'number' | 'date' | 'select' | 'checkbox';
+  visible: boolean;
+  required: boolean;
+  isCustom?: boolean;
+}
+
+export interface FormsCustomizationConfig {
+  tenantForm: CustomFormFieldConfig[];
+  expenseForm: CustomFormFieldConfig[];
+  ticketForm: CustomFormFieldConfig[];
+  handoverChecklist: { id: string; labelAr: string; visible: boolean; required: boolean }[];
+  customForms: { id: string; titleAr: string; linkedModule: string; fieldsCount: number; active: boolean }[];
+}
+
+export interface CatalogCategoryItem {
+  id: string;
+  nameAr: string;
+  nameEn: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  accountCode?: string;
+  vatTaxable?: boolean;
+  active: boolean;
+  subCategories?: string[];
+  minUnits?: number;
+  defaultVatPercent?: number;
+  defaultUsage?: string;
+  minArea?: number;
+  maxArea?: number;
+  defaultRooms?: number;
+  defaultBathrooms?: number;
+  defaultAmenities?: string[];
+  defaultRentCycle?: 'شهري' | 'سنوي';
+  linkedBankName?: string;
+  linkedIban?: string;
+  feePercent?: number;
+  minAmount?: number;
+  maxAmount?: number;
+  termType?: 'قصير الأمد' | 'طويل الأمد';
+}
+
+export interface LiabilityRecordItem {
+  id: string;
+  titleAr: string;
+  categoryId: string;
+  creditor: string;
+  termType: 'قصير الأمد' | 'طويل الأمد';
+  interestPercent: number;
+  totalAmount: number;
+  paidAmount: number;
+  dueDate: string;
+  accountCode: string;
+  notes?: string;
+}
+
+export interface DirectoryContactItem {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  category: 'مستأجر' | 'مورد' | 'مالك' | 'أخرى';
+  company?: string;
+  notes?: string;
+  archived?: boolean;
+  source: 'system' | 'phone' | 'csv' | 'ejar' | 'manual';
+  createdAt: string;
 }
 
 export interface CompanySettings {
@@ -1314,6 +1480,62 @@ export interface CompanySettings {
   backupPolicy?: BackupPolicyConfig;
   syncCenter?: SyncCenterConfig;
   developerCenter?: DeveloperCenterConfig;
+  calendarConfig?: CalendarSettingsConfig;
+  formsConfig?: FormsCustomizationConfig;
+  incomeCategories?: CatalogCategoryItem[];
+  expenseCategories?: CatalogCategoryItem[];
+  liabilityCategories?: CatalogCategoryItem[];
+  liabilityRecords?: LiabilityRecordItem[];
+  paymentMethodsConfig?: CatalogCategoryItem[];
+  propertyTypesConfig?: CatalogCategoryItem[];
+  unitTypesConfig?: CatalogCategoryItem[];
+  contactsDirectory?: DirectoryContactItem[];
+  contactsAutoSync?: boolean;
+  integrationsConfig?: IntegrationsConfig;
+}
+
+export interface IntegrationsConfig {
+  whatsappBusinessEnabled: boolean;
+  whatsappPhoneId?: string;
+  smtpEnabled: boolean;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSenderEmail?: string;
+  smtpUseTls?: boolean;
+  smsGatewayEnabled: boolean;
+  smsProviderName?: string;
+  smsSenderId?: string;
+  mapProvider: 'osm' | 'google_maps';
+  googleMapsLinked?: boolean;
+}
+
+export interface FavoriteReportPreset {
+  id: string;
+  title: string;
+  dataset: 'payments' | 'installments' | 'expenses' | 'units' | 'maintenance';
+  fields: string[];
+  propertyFilter: string;
+  statusFilter: string;
+  groupBy: 'none' | 'property' | 'status' | 'month';
+  sortField: string;
+  sortDir: 'asc' | 'desc';
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface SharedSearchFilter {
+  id: string;
+  name: string;
+  query: string;
+  entityType: 'all' | 'property' | 'unit' | 'tenant' | 'contract' | 'payment' | 'expense' | 'task' | 'ticket' | 'document';
+  propertyId: string;
+  onlyOverdue: boolean;
+  minAmount: number;
+  isFavorite: boolean;
+  isShared: boolean;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
 }
 
 export interface MeterReading {
@@ -1425,22 +1647,30 @@ export interface AqarDatabaseState {
   loginHistory?: LoginAuditEntry[];
   syncConflicts?: SyncConflictRecord[];
   scheduledReports?: ScheduledReportConfig[];
+  favoriteReports?: FavoriteReportPreset[];
+  sharedSearchFilters?: SharedSearchFilter[];
   zatcaInvoices?: ZatcaInvoiceRecord[];
   communicationTemplates?: CommunicationTemplate[];
   teamSeeded?: boolean;
   syncRevision?: number;
+  entityRevisions?: Record<string, number>;
   lastUpdatedAt: string;
 }
 
 export interface OfflineQueuedAction {
   id: string;
+  operationId: string;
   idempotencyKey: string;
-  method: 'POST' | 'PATCH';
+  method: 'POST' | 'PATCH' | 'DELETE';
   endpoint: string;
   body: unknown;
+  entityType?: string;
+  entityId?: string;
+  baseRevision?: number;
   descriptionAr: string;
   descriptionEn: string;
   queuedAt: string;
   userId: string;
   deviceName: string;
+  deviceId?: string;
 }

@@ -28,7 +28,6 @@ import { CurrencyCode, MeterReading, OcrExtractedData, Property, PropertyOwnersh
 import { CURRENCY_META, formatCurrency, formatSar } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
 import { QrCodeSvg } from './QrCodeSvg';
-import { PrintViewButton } from './PrintViewButton';
 import { SwipeableRow } from './SwipeableRow';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { CreateTaskQuickButton } from './CreateTaskQuickModal';
@@ -587,7 +586,6 @@ export function PropertiesUnitsView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 no-print">
-          <PrintViewButton />
           {activeTab === 'meters' ? (
             hasPermission('manage_properties') && (
               <button

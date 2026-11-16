@@ -3,17 +3,20 @@ import * as XLSX from 'xlsx';
 import {
   ArrowDown,
   ArrowUp,
+  Bookmark,
   CalendarClock,
   Download,
   FileSpreadsheet,
+  GripVertical,
   Play,
   Plus,
   Printer,
   SlidersHorizontal,
+  Star,
   Trash2,
 } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
-import { ScheduledReportConfig } from '../types/aqar';
+import { FavoriteReportPreset, ScheduledReportConfig } from '../types/aqar';
 import { exportToCsv, formatCurrency, formatDateTime } from '../utils/formatters';
 import { AQAR_THEME } from '../theme/designTokens';
 import { UnifiedButton, UnifiedCard, UnifiedEmptyState, UnifiedSectionHeader } from './ui/UnifiedComponents';
@@ -135,6 +138,8 @@ export function AdvancedReportBuilder() {
     recipient: '',
   });
   const [savingSched, setSavingSched] = useState(false);
+  const [dragFieldKey, setDragFieldKey] = useState<string | null>(null);
+  const [savingFav, setSavingFav] = useState(false);
 
   const meta = DATASET_META[dataset];
 
@@ -166,6 +171,21 @@ export function AdvancedReportBuilder() {
       copy.splice(nextIdx, 0, item);
       return copy;
     });
+  };
+
+  const reorderFieldByDrop = (targetKey: string) => {
+    if (!dragFieldKey || dragFieldKey === targetKey) return;
+    setSelectedFields((prev) => {
+      const from = prev.indexOf(dragFieldKey);
+      const to = prev.indexOf(targetKey);
+      if (from < 0 || to < 0) return prev;
+      const copy = [...prev];
+      const [moved] = copy.splice(from, 1);
+      copy.splice(to, 0, moved);
+      return copy;
+    });
+    setDragFieldKey(null);
+    triggerHaptic('light');
   };
 
   const rawRows = useMemo(() => {
@@ -363,14 +383,126 @@ export function AdvancedReportBuilder() {
     }
   };
 
+  const handleSaveFavorite = async () => {
+    setSavingFav(true);
+    const res = await mutate('POST', '/api/reports/favorites', {
+      title: reportTitle.trim() || meta.labelAr,
+      dataset,
+      fields: selectedFields,
+      propertyFilter,
+      statusFilter,
+      groupBy,
+      sortField,
+      sortDir,
+    });
+    setSavingFav(false);
+    if (res) {
+      triggerHaptic('success');
+      pushToast('success', 'تم حفظ التقرير في قائمة التقارير المفضلة');
+    }
+  };
+
+  const handleLoadFavorite = (fav: FavoriteReportPreset) => {
+    triggerHaptic('light');
+    setReportTitle(fav.title);
+    setDataset(fav.dataset);
+    setSelectedFields(fav.fields);
+    setPropertyFilter(fav.propertyFilter);
+    setStatusFilter(fav.statusFilter);
+    setGroupBy(fav.groupBy);
+    setSortField(fav.sortField);
+    setSortDir(fav.sortDir);
+    pushToast('info', `تم تحميل التقرير المفضل: ${fav.title}`);
+  };
+
+  const handleExportBrandedPdf = () => {
+    triggerHaptic('light');
+    const esc = (s: unknown) =>
+      String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const logoSrc = state.settings.logoDataUrl || './assets/aistudio/Aqar_plus_8de53ba4.svg';
+    const ths = activeFieldDefs.map((f) => `<th>${esc(f.labelAr)}</th>`).join('');
+    const trs = rawRows
+      .slice(0, 250)
+      .map(
+        (r) =>
+          `<tr>${activeFieldDefs
+            .map((f) => {
+              const val =
+                f.numeric && f.key !== 'areaSqm'
+                  ? formatCurrency(Number(r[f.key] || 0), baseCurrency, lang)
+                  : r[f.key] ?? '—';
+              return `<td>${esc(val)}</td>`;
+            })
+            .join('')}</tr>`
+      )
+      .join('');
+    const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8" /><title>${esc(
+      reportTitle || meta.labelAr
+    )}</title><style>
+      @page{size:A4 landscape;margin:12mm;}
+      body{font-family:'IBM Plex Sans Arabic',system-ui,sans-serif;color:#0f172a;margin:0;}
+      .hdr{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #26478D;padding-bottom:10px;margin-bottom:14px;}
+      .brand{display:flex;align-items:center;gap:12px;}
+      .brand img{width:46px;height:46px;object-fit:contain;border-radius:8px;border:1px solid #cbd5e1;padding:3px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;}
+      th{background:#26478D;color:#fff;padding:8px;text-align:start;}
+      td{border-bottom:1px solid #e2e8f0;padding:7px 8px;}
+      tr:nth-child(even) td{background:#f8fafc;}
+    </style></head><body>
+      <div class="hdr">
+        <div class="brand">
+          <img src="${esc(logoSrc)}" alt="Logo" />
+          <div>
+            <div style="font-size:16px;font-weight:700;color:#26478D;">${esc(state.settings.nameAr)}</div>
+            <div style="font-size:13px;font-weight:600;">${esc(reportTitle || meta.labelAr)}</div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:#475569;text-align:end;">
+          <div>الرقم الضريبي: ${esc(state.settings.vatNumber)} · السجل: ${esc(state.settings.crNumber)}</div>
+          <div>السجلات: ${rawRows.length} · تاريخ التوليد: ${new Date().toISOString().slice(0, 10)}</div>
+        </div>
+      </div>
+      <table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
+    </body></html>`;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow?.document;
+    if (doc) {
+      doc.open();
+      doc.write(html);
+      doc.close();
+      setTimeout(() => {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+        setTimeout(() => {
+          if (iframe.parentNode) document.body.removeChild(iframe);
+        }, 1200);
+      }, 250);
+    }
+    pushToast('success', 'تم تجهيز التقرير الرسمي بشعار الشركة للطباعة / PDF');
+  };
+
   return (
     <div className="space-y-6">
       <UnifiedCard className="space-y-5">
         <UnifiedSectionHeader
           title="منشئ التقارير المخصص (Report Builder)"
-          subtitle="اختر مصدر البيانات والأعمدة وترتيبها والتجميع ثم صدّر إلى Excel أو CSV أو PDF"
+          subtitle="اسحب وأفلت الحقول لترتيبها، احفظ التقارير المفضلة، وجدول الإرسال الدوري مع التصدير الرسمي"
           actions={
             <div className="flex flex-wrap items-center gap-2 no-print">
+              <UnifiedButton
+                variant="secondary"
+                loading={savingFav}
+                onClick={handleSaveFavorite}
+                icon={<Star className="w-3.5 h-3.5 text-amber-500" />}
+              >
+                حفظ كمفضل
+              </UnifiedButton>
               <UnifiedButton
                 variant="secondary"
                 onClick={() => setShowScheduleForm((v) => !v)}
@@ -381,8 +513,8 @@ export function AdvancedReportBuilder() {
               <UnifiedButton variant="secondary" onClick={handleExportCsv} icon={<Download className="w-3.5 h-3.5" />}>
                 CSV
               </UnifiedButton>
-              <UnifiedButton variant="secondary" onClick={() => window.print()} icon={<Printer className="w-3.5 h-3.5" />}>
-                PDF / طباعة
+              <UnifiedButton variant="secondary" onClick={handleExportBrandedPdf} icon={<Printer className="w-3.5 h-3.5" />}>
+                PDF بشعار الشركة
               </UnifiedButton>
               <UnifiedButton onClick={handleExportExcel} icon={<FileSpreadsheet className="w-3.5 h-3.5" />}>
                 تصدير Excel احترافي
@@ -453,7 +585,7 @@ export function AdvancedReportBuilder() {
           <div className="lg:col-span-8 space-y-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300">
               <SlidersHorizontal className="w-3.5 h-3.5 text-[#26478D] dark:text-blue-400" />
-              <span>الأعمدة المختارة وترتيب الظهور</span>
+              <span>الأعمدة المختارة وترتيب الظهور (اسحب وأفلت أو استخدم الأسهم)</span>
             </div>
             <div className="flex flex-wrap gap-2">
               {meta.fields.map((field) => {
@@ -462,12 +594,21 @@ export function AdvancedReportBuilder() {
                 return (
                   <div
                     key={field.key}
+                    draggable={isSelected}
+                    onDragStart={() => isSelected && setDragFieldKey(field.key)}
+                    onDragOver={(e) => {
+                      if (isSelected && dragFieldKey) e.preventDefault();
+                    }}
+                    onDrop={() => isSelected && reorderFieldByDrop(field.key)}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs transition-colors ${
-                      isSelected
-                        ? 'border-[#26478D] bg-[#26478D]/10 dark:bg-[#26478D]/30 text-slate-900 dark:text-white font-semibold'
+                      dragFieldKey === field.key
+                        ? 'border-amber-500 bg-amber-500/15 opacity-75'
+                        : isSelected
+                        ? 'border-[#26478D] bg-[#26478D]/10 dark:bg-[#26478D]/30 text-slate-900 dark:text-white font-semibold cursor-grab'
                         : 'border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400'
                     }`}
                   >
+                    {isSelected && <GripVertical className="w-3 h-3 text-slate-400 shrink-0" />}
                     <label className="inline-flex items-center gap-1.5 cursor-pointer">
                       <input
                         type="checkbox"
@@ -667,6 +808,48 @@ export function AdvancedReportBuilder() {
                 </tfoot>
               )}
             </table>
+          </div>
+        )}
+      </UnifiedCard>
+
+      {/* Favorite Saved Report Presets */}
+      <UnifiedCard className="space-y-4 no-print">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Bookmark className="w-4 h-4 text-amber-500" />
+            <h3 className="text-sm font-bold">التقارير المفضلة المحفوظة ({(state.favoriteReports || []).length})</h3>
+          </div>
+        </div>
+        {(state.favoriteReports || []).length === 0 ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            اضغط «حفظ كمفضل» في منشئ التقارير لتثبيت إعدادات الأعمدة والفلاتر والوصول إليها بنقرة واحدة.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {(state.favoriteReports || []).map((fav) => (
+              <div
+                key={fav.id}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs"
+              >
+                <button
+                  type="button"
+                  onClick={() => handleLoadFavorite(fav)}
+                  className="font-bold text-slate-900 dark:text-white hover:underline cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                  <span>{fav.title}</span>
+                  <span className="text-[11px] font-normal text-slate-500">({DATASET_META[fav.dataset]?.labelAr})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => mutate('DELETE', `/api/reports/favorites/${fav.id}`)}
+                  className="p-1 rounded-lg text-red-500 hover:bg-red-500/15 cursor-pointer"
+                  aria-label="Delete favorite report"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </UnifiedCard>

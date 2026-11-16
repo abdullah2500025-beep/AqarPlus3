@@ -3,7 +3,6 @@ import { Plus, Wrench, CheckSquare, ShieldCheck, X, Receipt } from 'lucide-react
 import { useAqar } from '../context/AqarContext';
 import { MaintenanceTicket, TaskItem, TaskStatus, TicketPriority, TicketStatus } from '../types/aqar';
 import { formatSar } from '../utils/formatters';
-import { PrintViewButton } from './PrintViewButton';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { CreateTaskQuickButton } from './CreateTaskQuickModal';
 
@@ -193,7 +192,6 @@ export function MaintenanceTasksView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <PrintViewButton />
           <CreateTaskQuickButton
             defaultType="صيانة"
             relatedLabel="مركز الصيانة والمهام"

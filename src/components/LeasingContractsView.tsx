@@ -35,7 +35,6 @@ import {
 import { formatDateTime, formatSar } from '../utils/formatters';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { CreateTaskQuickButton } from './CreateTaskQuickModal';
-import { PrintViewButton } from './PrintViewButton';
 import { readFileAsDataUrl, runGeminiOcrExtraction } from '../utils/ocrClient';
 
 export function LeasingContractsView() {
@@ -494,7 +493,6 @@ export function LeasingContractsView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <PrintViewButton />
           <CreateTaskQuickButton
             defaultType="تأجير"
             defaultTitle="متابعة توثيق عقد إيجار ومحضر التسليم"

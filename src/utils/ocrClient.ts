@@ -13,6 +13,19 @@ export interface OcrApiResponse {
   state?: AqarDatabaseState;
 }
 
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (typeof window !== 'undefined') {
+    const token = window.localStorage.getItem('aqarplus_auth_token_v1');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+  }
+  return headers;
+}
+
 export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -26,7 +39,7 @@ export function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 export async function runGeminiOcrExtraction(params: {
-  userId: string;
+  userId?: string;
   dataUrl: string;
   mimeType?: string;
   fileName?: string;
@@ -40,10 +53,8 @@ export async function runGeminiOcrExtraction(params: {
 }): Promise<OcrApiResponse> {
   const res = await fetch('/api/documents/ocr', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-id': params.userId || 'usr-gm',
-    },
+    credentials: 'include',
+    headers: getAuthHeaders(),
     body: JSON.stringify({
       dataUrl: params.dataUrl,
       mimeType: params.mimeType,
@@ -65,7 +76,7 @@ export async function runGeminiOcrExtraction(params: {
 }
 
 export async function syncOcrEntities(params: {
-  userId: string;
+  userId?: string;
   extracted: OcrExtractedData;
   docId?: string;
   targetTenantId?: string;
@@ -81,10 +92,8 @@ export async function syncOcrEntities(params: {
 }> {
   const res = await fetch('/api/documents/sync-ocr', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-user-id': params.userId || 'usr-gm',
-    },
+    credentials: 'include',
+    headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
   const json = await res.json();

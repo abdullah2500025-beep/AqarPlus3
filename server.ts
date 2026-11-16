@@ -1,21 +1,114 @@
 import http from 'http';
 import path from 'path';
-import express, { Request, Response } from 'express';
+import crypto from 'crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import express, { NextFunction, Request, Response } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
-import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
-import { AqarStore } from './server/store';
+import { AqarStore, ProvisionWorkspaceOptions } from './server/store';
 import { extractDocumentDataWithGemini } from './server/ocr';
+import { signSessionToken, verifySessionToken } from './server/cryptoAuth';
+import { dispatchSyncOperation } from './server/syncDispatcher';
 
 dotenv.config();
 
-const PORT = Number(process.env.PORT) || 3000;
-const store = new AqarStore();
+const SESSION_COOKIE_NAME = 'aqar_session';
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+function resolvePort(): number {
+  const portFlagIdx = process.argv.findIndex((a) => a === '--port' || a === '-p');
+  if (portFlagIdx !== -1 && process.argv[portFlagIdx + 1]) {
+    const parsed = Number(process.argv[portFlagIdx + 1]);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const eqFlag = process.argv.find((a) => a.startsWith('--port='));
+  if (eqFlag) {
+    const parsed = Number(eqFlag.split('=')[1]);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const envPort = Number(process.env.PORT);
+  if (Number.isFinite(envPort) && envPort > 0 && envPort !== 8080) return envPort;
+  return 3000;
+}
+
+const PORT = resolvePort();
+
+function normalizeWorkspaceId(raw?: string | null): string {
+  const clean = (raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return clean.length >= 3 && clean.length <= 40 ? clean : 'default';
+}
+
+function resolveRequestWorkspaceId(req: http.IncomingMessage): string {
+  const headerWs = req.headers['x-workspace-id'];
+  if (typeof headerWs === 'string' && headerWs.trim()) {
+    return normalizeWorkspaceId(headerWs);
+  }
+  const rawUrl = req.url || '/';
+  const qIdx = rawUrl.indexOf('?');
+  if (qIdx >= 0) {
+    const params = new URLSearchParams(rawUrl.slice(qIdx + 1));
+    const qWs = params.get('workspace');
+    if (qWs) return normalizeWorkspaceId(qWs);
+  }
+  return 'default';
+}
+
+const workspaceStores = new Map<string, AqarStore>();
+const workspaceAls = new AsyncLocalStorage<{ workspaceId: string; store: AqarStore }>();
+
+function getExistingWorkspaceStore(workspaceId = 'default'): AqarStore | null {
+  const clean = normalizeWorkspaceId(workspaceId);
+  const cached = workspaceStores.get(clean);
+  if (cached) return cached;
+  if (clean !== 'default' && !AqarStore.workspaceExists(clean)) {
+    return null;
+  }
+  const created = new AqarStore(clean);
+  workspaceStores.set(clean, created);
+  return created;
+}
+
+function provisionNewWorkspaceStore(workspaceId: string, opts: ProvisionWorkspaceOptions): AqarStore {
+  const clean = normalizeWorkspaceId(workspaceId);
+  if (clean === 'default' || workspaceStores.has(clean) || AqarStore.workspaceExists(clean)) {
+    throw new Error('مساحة العمل هذه مفعّلة مسبقاً — اختر معرّف شركة مختلفاً أو سجّل الدخول');
+  }
+  const created = new AqarStore(clean, opts);
+  workspaceStores.set(clean, created);
+  return created;
+}
+
+const store = new Proxy({} as AqarStore, {
+  get(_target, prop) {
+    const active = workspaceAls.getStore()?.store || getExistingWorkspaceStore('default')!;
+    const value = (active as unknown as Record<PropertyKey, unknown>)[prop];
+    return typeof value === 'function' ? value.bind(active) : value;
+  },
+});
+
+interface AuthenticatedActor {
+  userId: string;
+  workspaceId: string;
+  role: string;
+  sessionId: string;
+  rawToken: string;
+  deviceName?: string;
+  ipAddress: string;
+}
+
+type AuthedRequest = Request & { authActor?: AuthenticatedActor };
 
 interface ClientSession {
   ws: WebSocket;
+  workspaceId: string;
   sessionId: string;
   userId: string;
+  authenticated: boolean;
   deviceName: string;
   ipAddress: string;
   connectedAt: string;
@@ -32,8 +125,96 @@ function extractClientIp(req: http.IncomingMessage): string {
   return remote.replace(/^::ffff:/, '');
 }
 
-function getPresenceList() {
-  const state = store.getState();
+function parseCookies(cookieHeader?: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!cookieHeader) return result;
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    try {
+      result[key] = decodeURIComponent(val);
+    } catch {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
+function extractSessionToken(req: http.IncomingMessage): string | null {
+  const authHeader = req.headers['authorization'];
+  if (typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+  const cookies = parseCookies(req.headers['cookie']);
+  return cookies[SESSION_COOKIE_NAME] || null;
+}
+
+function resolveSessionActor(req: http.IncomingMessage, overrideToken?: string): AuthenticatedActor | null {
+  const workspaceId = resolveRequestWorkspaceId(req);
+  const wsStore = getExistingWorkspaceStore(workspaceId);
+  if (!wsStore) return null;
+  const rawToken = overrideToken || extractSessionToken(req);
+  if (!rawToken) return null;
+  const payload = verifySessionToken(rawToken, wsStore.getSessionSecret());
+  if (!payload) return null;
+  if (payload.wid && payload.wid !== workspaceId) return null;
+  const dbSession = wsStore.getPersistence().isSessionActive(rawToken);
+  if (!dbSession || dbSession.userId !== payload.uid) return null;
+  const user = wsStore.getState().users.find((u) => u.id === payload.uid && u.active);
+  if (!user) return null;
+
+  const rawDevice = req.headers['x-device-name'];
+  let deviceName = payload.deviceName;
+  if (rawDevice) {
+    try {
+      deviceName = decodeURIComponent(String(rawDevice));
+    } catch {
+      deviceName = String(rawDevice);
+    }
+  }
+  return {
+    userId: user.id,
+    workspaceId,
+    role: user.role,
+    sessionId: payload.sid,
+    rawToken,
+    deviceName,
+    ipAddress: extractClientIp(req),
+  };
+}
+
+function issueUserSession(
+  res: Response,
+  userId: string,
+  role: string,
+  deviceName = 'Web Terminal',
+  workspaceId = workspaceAls.getStore()?.workspaceId || 'default'
+): { token: string; expiresAt: string } {
+  const wsStore = getExistingWorkspaceStore(workspaceId)!;
+  const now = Date.now();
+  const exp = now + SESSION_TTL_MS;
+  const expiresAt = new Date(exp).toISOString();
+  const sid = `ses-${crypto.randomBytes(8).toString('hex')}`;
+  const token = signSessionToken(
+    { sid, uid: userId, wid: workspaceId, role, deviceName, iat: now, exp },
+    wsStore.getSessionSecret()
+  );
+  wsStore.getPersistence().createSession(token, userId, deviceName, expiresAt);
+  res.cookie(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: SESSION_TTL_MS,
+  });
+  return { token, expiresAt };
+}
+
+function getPresenceList(workspaceId = workspaceAls.getStore()?.workspaceId || 'default') {
+  const wsStore = getExistingWorkspaceStore(workspaceId);
+  if (!wsStore) return [];
+  const state = wsStore.getState();
   const seen = new Map<
     string,
     {
@@ -47,6 +228,7 @@ function getPresenceList() {
     }
   >();
   for (const s of activeSessions.values()) {
+    if (!s.authenticated || s.workspaceId !== workspaceId) continue;
     const user = state.users.find((u) => u.id === s.userId);
     if (user) {
       seen.set(s.sessionId, {
@@ -63,50 +245,307 @@ function getPresenceList() {
   return Array.from(seen.values());
 }
 
-function broadcastPresence() {
-  const payload = JSON.stringify({ type: 'presence:update', sessions: getPresenceList() });
-  for (const client of activeSessions.keys()) {
-    if (client.readyState === WebSocket.OPEN) {
+function broadcastPresence(workspaceId = workspaceAls.getStore()?.workspaceId || 'default') {
+  const payload = JSON.stringify({ type: 'presence:update', sessions: getPresenceList(workspaceId) });
+  for (const [client, session] of activeSessions.entries()) {
+    if (session.authenticated && session.workspaceId === workspaceId && client.readyState === WebSocket.OPEN) {
       client.send(payload);
     }
   }
 }
 
-function broadcastStateChange(actorUserId: string, eventSummary: string) {
+function broadcastStateChange(
+  actorUserId: string,
+  eventSummary: string,
+  workspaceId = workspaceAls.getStore()?.workspaceId || 'default'
+) {
+  const wsStore = getExistingWorkspaceStore(workspaceId);
+  if (!wsStore) return;
   for (const [client, session] of activeSessions.entries()) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(
-        JSON.stringify({
-          type: 'state:updated',
-          actorUserId,
-          summary: eventSummary,
-          state: store.getStateForUser(session.userId),
-        })
-      );
+    if (session.authenticated && session.workspaceId === workspaceId && client.readyState === WebSocket.OPEN) {
+      try {
+        client.send(
+          JSON.stringify({
+            type: 'state:updated',
+            actorUserId,
+            summary: eventSummary,
+            state: wsStore.getStateForUser(session.userId),
+          })
+        );
+      } catch {
+        // Skip deactivated or unauthorized WS session
+      }
     }
   }
 }
 
-function getActor(req: Request): { userId: string; deviceName?: string; ipAddress: string } {
-  const userId = String(req.headers['x-user-id'] || req.query.userId || 'usr-gm');
-  const rawDevice = req.headers['x-device-name'];
-  const deviceName = rawDevice ? decodeURIComponent(String(rawDevice)) : undefined;
-  return { userId, deviceName, ipAddress: extractClientIp(req) };
+function getActor(req: Request): AuthenticatedActor {
+  const actor = (req as AuthedRequest).authActor;
+  if (!actor) {
+    throw new Error('جلسة غير مصرح بها — يرجى تسجيل الدخول');
+  }
+  return actor;
 }
+
+const PUBLIC_API_EXACT = new Set([
+  '/api/health',
+  '/api/workspaces/provision',
+  '/api/auth/session',
+  '/api/auth/login',
+  '/api/auth/login-pin',
+  '/api/auth/logout',
+  '/api/public/prospect-context',
+  '/api/public/leads',
+]);
 
 function handleApi(app: express.Express) {
   app.use(express.json({ limit: '15mb' }));
 
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    const workspaceId = resolveRequestWorkspaceId(req);
+    const fullPath = `/api${req.path}`;
+    if (fullPath === '/api/workspaces/provision') {
+      return next();
+    }
+    const wsStore = getExistingWorkspaceStore(workspaceId);
+    if (!wsStore) {
+      if (fullPath === '/api/auth/session') {
+        return res.json({
+          authenticated: false,
+          workspaceId,
+          workspaceExists: false,
+          demoLoginEnabled: process.env.AQAR_DEMO_LOGIN === 'true',
+          loginProfiles: [],
+          companyBranding: {
+            nameAr: 'مساحة عمل جديدة',
+            nameEn: 'New Workspace',
+          },
+        });
+      }
+      if (fullPath === '/api/auth/login' || fullPath === '/api/auth/login-pin') {
+        return res.status(401).json({
+          error: 'معرّف الشركة غير مسجل بعد — اضغط «شركة جديدة» لتأسيسها أو تأكد من Workspace ID',
+        });
+      }
+      return res.status(401).json({
+        error: 'انتهت الجلسة أو لم يتم تسجيل الدخول — يرجى المصادقة للمتابعة',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+    workspaceAls.run({ workspaceId, store: wsStore }, () => next());
+  });
+
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, lastUpdatedAt: store.getState().lastUpdatedAt });
+    res.json({
+      ok: true,
+      workspaceId: workspaceAls.getStore()?.workspaceId || 'default',
+      lastUpdatedAt: store.getState().lastUpdatedAt,
+      sqlite: store.getPersistence().getDiagnostics(),
+    });
+  });
+
+  app.post('/api/workspaces/provision', (req: Request, res: Response) => {
+    try {
+      const requestedSlug = String(req.body?.workspaceSlug || '');
+      const headerWs = req.headers['x-workspace-id'];
+      const workspaceId = normalizeWorkspaceId(
+        requestedSlug || (typeof headerWs === 'string' ? headerWs : '')
+      );
+      if (workspaceId === 'default') {
+        return res.status(400).json({
+          error: 'يرجى اختيار معرّف شركة مخصص باللغة الإنجليزية (3 أحرف على الأقل)',
+        });
+      }
+      const companyNameAr = String(req.body?.companyNameAr || '').trim();
+      const companyNameEn = String(req.body?.companyNameEn || companyNameAr || 'AqarPlus Workspace').trim();
+      const adminNameAr = String(req.body?.adminNameAr || '').trim();
+      const adminEmail = String(req.body?.adminEmail || '').trim().toLowerCase();
+      const adminPhone = String(req.body?.adminPhone || '').trim();
+      const password = String(req.body?.password || '');
+      const pin = String(req.body?.pin || '').trim();
+
+      if (!companyNameAr || !adminNameAr || !adminEmail || password.length < 8) {
+        return res.status(400).json({
+          error: 'يلزم إدخال اسم الشركة، واسم المدير، والبريد الإلكتروني، وكلمة مرور لا تقل عن 8 أحرف',
+        });
+      }
+      if (pin && !/^\d{4,6}$/.test(pin)) {
+        return res.status(400).json({ error: 'رمز PIN يجب أن يتكون من 4 إلى 6 أرقام فقط' });
+      }
+
+      const deviceName = String(req.body?.deviceName || 'Web Terminal');
+      const provisionedStore = provisionNewWorkspaceStore(workspaceId, {
+        companyNameAr,
+        companyNameEn,
+        adminNameAr,
+        adminEmail,
+        adminPhone,
+        password,
+        pin: pin || undefined,
+        deviceName,
+      });
+
+      return workspaceAls.run({ workspaceId, store: provisionedStore }, () => {
+        const adminUser = provisionedStore.getState().users[0];
+        const { token, expiresAt } = issueUserSession(
+          res,
+          adminUser.id,
+          adminUser.role,
+          deviceName,
+          workspaceId
+        );
+        res.status(201).json({
+          ok: true,
+          workspaceId,
+          authenticated: true,
+          user: adminUser,
+          token,
+          expiresAt,
+          state: provisionedStore.getStateForUser(adminUser.id),
+        });
+      });
+    } catch (e: unknown) {
+      const msg = (e as Error).message || 'تعذر تأسيس مساحة العمل';
+      res.status(msg.includes('مفعّلة مسبقاً') ? 409 : 400).json({ error: msg });
+    }
+  });
+
+  // Authentication & Session Endpoints
+  app.get('/api/auth/session', (req: Request, res: Response) => {
+    const settings = store.getState().settings;
+    const demoLoginEnabled = process.env.AQAR_DEMO_LOGIN === 'true';
+    const workspaceId = workspaceAls.getStore()?.workspaceId || 'default';
+    const companyBranding = {
+      nameAr: settings.nameAr,
+      nameEn: settings.nameEn,
+      logoDataUrl: settings.logoDataUrl,
+    };
+    const actor = resolveSessionActor(req);
+    if (!actor) {
+      return res.json({
+        authenticated: false,
+        workspaceId,
+        workspaceExists: true,
+        demoLoginEnabled,
+        loginProfiles: demoLoginEnabled ? store.getLoginProfiles() : [],
+        companyBranding,
+      });
+    }
+    const user = store.getState().users.find((u) => u.id === actor.userId);
+    res.json({
+      authenticated: true,
+      workspaceId,
+      workspaceExists: true,
+      user,
+      token: actor.rawToken,
+      demoLoginEnabled,
+      loginProfiles: demoLoginEnabled ? store.getLoginProfiles() : [],
+      companyBranding,
+    });
+  });
+
+  app.post('/api/auth/login', (req: Request, res: Response) => {
+    try {
+      const identifier = String(req.body?.identifier || req.body?.email || req.body?.userId || '');
+      const password = String(req.body?.password || '');
+      const deviceName = req.body?.deviceName
+        ? String(req.body.deviceName)
+        : req.headers['x-device-name']
+        ? decodeURIComponent(String(req.headers['x-device-name']))
+        : 'Web Terminal';
+      const user = store.authenticatePassword(identifier, password, deviceName);
+      const { token, expiresAt } = issueUserSession(res, user.id, user.role, deviceName);
+      broadcastPresence();
+      res.json({
+        authenticated: true,
+        user,
+        token,
+        expiresAt,
+        state: store.getStateForUser(user.id),
+      });
+    } catch (e: unknown) {
+      const msg = (e as Error).message;
+      res.status(msg.includes('قفل الحساب') ? 429 : 401).json({ error: msg });
+    }
+  });
+
+  app.post('/api/auth/login-pin', (req: Request, res: Response) => {
+    try {
+      const userId = String(req.body?.userId || req.body?.identifier || '');
+      const pin = String(req.body?.pin || '');
+      const deviceName = req.body?.deviceName ? String(req.body.deviceName) : 'Web Terminal';
+      const user = store.authenticatePin(userId, pin, deviceName);
+      const { token, expiresAt } = issueUserSession(res, user.id, user.role, deviceName);
+      broadcastPresence();
+      res.json({
+        authenticated: true,
+        user,
+        token,
+        expiresAt,
+        state: store.getStateForUser(user.id),
+      });
+    } catch (e: unknown) {
+      const msg = (e as Error).message;
+      res.status(msg.includes('قفل') ? 429 : 401).json({ error: msg });
+    }
+  });
+
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    const rawToken = extractSessionToken(req);
+    if (rawToken) {
+      store.getPersistence().revokeSession(rawToken);
+    }
+    res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+    res.json({ ok: true });
+  });
+
+  // Strict Authentication Middleware for all protected /api/* routes
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    const fullPath = `/api${req.path}`;
+    if (PUBLIC_API_EXACT.has(fullPath) || fullPath.startsWith('/api/public/lead-decision/')) {
+      return next();
+    }
+    const actor = resolveSessionActor(req);
+    if (!actor) {
+      return res.status(401).json({
+        error: 'انتهت الجلسة أو لم يتم تسجيل الدخول — يرجى المصادقة للمتابعة',
+        code: 'AUTH_REQUIRED',
+      });
+    }
+    (req as AuthedRequest).authActor = actor;
+    next();
+  });
+
+  app.post('/api/auth/credentials', (req: Request, res: Response) => {
+    try {
+      const actor = getActor(req);
+      const targetUserId = String(req.body?.targetUserId || actor.userId);
+      store.updateUserCredentials(
+        actor.userId,
+        targetUserId,
+        {
+          currentPassword: req.body?.currentPassword,
+          newPassword: req.body?.newPassword,
+          newPin: req.body?.newPin,
+        },
+        actor.deviceName
+      );
+      res.json({ ok: true, state: store.getStateForUser(actor.userId) });
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
   });
 
   app.get('/api/state', (req: Request, res: Response) => {
-    const { userId } = getActor(req);
-    res.json({
-      state: store.getStateForUser(userId),
-      presence: getPresenceList(),
-    });
+    try {
+      const { userId } = getActor(req);
+      res.json({
+        state: store.getStateForUser(userId),
+        presence: getPresenceList(),
+      });
+    } catch (e: unknown) {
+      res.status(401).json({ error: (e as Error).message });
+    }
   });
 
   app.post('/api/properties', (req: Request, res: Response) => {
@@ -419,7 +858,12 @@ function handleApi(app: express.Express) {
   app.post('/api/backups', (req: Request, res: Response) => {
     try {
       const { userId, deviceName } = getActor(req);
-      const backup = store.createBackup(userId, req.body.label, deviceName);
+      const backup = store.createBackup(
+        userId,
+        req.body.label,
+        deviceName,
+        req.body?.encryptPassword ? String(req.body.encryptPassword) : undefined
+      );
       broadcastStateChange(userId, `إنشاء نسخة احتياطية`);
       res.status(201).json({ backup, state: store.getStateForUser(userId) });
     } catch (e: unknown) {
@@ -430,9 +874,11 @@ function handleApi(app: express.Express) {
   app.post('/api/backups/:id/restore', (req: Request, res: Response) => {
     try {
       const { userId, deviceName } = getActor(req);
-      const restored = store.restoreBackup(userId, String(req.params.id), deviceName);
-      broadcastStateChange(userId, `استعادة نسخة احتياطية`);
-      res.json({ ok: true, state: restored });
+      const mode = req.body?.mode === 'merge' ? 'merge' : 'replace';
+      const password = req.body?.password ? String(req.body.password) : undefined;
+      store.restoreBackup(userId, String(req.params.id), deviceName, mode, password);
+      broadcastStateChange(userId, `استعادة نسخة احتياطية (${mode === 'merge' ? 'دمج ذكي' : 'استبدال كامل'})`);
+      res.json({ ok: true, mode, state: store.getStateForUser(userId) });
     } catch (e: unknown) {
       res.status(400).json({ error: (e as Error).message });
     }
@@ -786,6 +1232,17 @@ function handleApi(app: express.Express) {
     }
   });
 
+  app.delete('/api/team/users/:id', (req: Request, res: Response) => {
+    try {
+      const { userId, deviceName } = getActor(req);
+      const result = store.deleteStaffUser(userId, String(req.params.id), deviceName);
+      broadcastStateChange(userId, 'حذف حساب مستخدم');
+      res.json({ ...result, state: store.getStateForUser(userId) });
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
   app.patch('/api/team/security-policy', (req: Request, res: Response) => {
     try {
       const { userId, deviceName } = getActor(req);
@@ -916,7 +1373,18 @@ function handleApi(app: express.Express) {
 
   app.get('/api/backups/:id/preview', (req: Request, res: Response) => {
     try {
-      const preview = store.previewBackup(String(req.params.id));
+      const password = req.query.password ? String(req.query.password) : undefined;
+      const preview = store.previewBackup(String(req.params.id), password);
+      res.json(preview);
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.post('/api/backups/:id/preview', (req: Request, res: Response) => {
+    try {
+      const password = req.body?.password ? String(req.body.password) : undefined;
+      const preview = store.previewBackup(String(req.params.id), password);
       res.json(preview);
     } catch (e: unknown) {
       res.status(400).json({ error: (e as Error).message });
@@ -1269,12 +1737,19 @@ function handleApi(app: express.Express) {
 
       for (const op of operations) {
         if (!op || typeof op.endpoint !== 'string' || !op.endpoint.startsWith('/api/')) continue;
+        const operationId = String(op.operationId || op.idempotencyKey || '');
+        const opMethod: 'POST' | 'PATCH' | 'DELETE' =
+          op.method === 'PATCH' ? 'PATCH' : op.method === 'DELETE' ? 'DELETE' : 'POST';
         const evalRes = store.evaluateSyncOperationConflict(
-          op.userId || userId,
+          userId,
           {
-            idempotencyKey: String(op.idempotencyKey || ''),
-            method: op.method === 'PATCH' ? 'PATCH' : 'POST',
+            operationId,
+            idempotencyKey: String(op.idempotencyKey || operationId),
+            method: opMethod,
             endpoint: op.endpoint,
+            entityType: op.entityType ? String(op.entityType) : undefined,
+            entityId: op.entityId ? String(op.entityId) : undefined,
+            baseRevision: typeof op.baseRevision === 'number' ? op.baseRevision : undefined,
             descriptionAr: String(op.descriptionAr || ''),
             queuedAt: String(op.queuedAt || new Date().toISOString()),
             deviceName: op.deviceName || deviceName,
@@ -1288,25 +1763,30 @@ function handleApi(app: express.Express) {
         if (evalRes.conflict) {
           newConflicts.push(evalRes.conflict);
         }
-        try {
-          const resp = await fetch(`http://127.0.0.1:${PORT}${op.endpoint}`, {
-            method: op.method === 'PATCH' ? 'PATCH' : 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-user-id': op.userId || userId,
-              'x-device-name': encodeURIComponent(op.deviceName || deviceName),
-              'x-idempotency-key': String(op.idempotencyKey || ''),
-            },
-            body: op.body !== undefined ? JSON.stringify(op.body) : undefined,
-          });
-          if (!resp.ok) {
-            const errJson = await resp.json().catch(() => ({}));
-            errors.push(`${op.descriptionAr || op.endpoint}: ${errJson.error || resp.status}`);
-          } else {
-            uploaded += 1;
+        const dispatchRes = dispatchSyncOperation(store, {
+          method: opMethod,
+          endpoint: op.endpoint,
+          body: (op.body && typeof op.body === 'object' ? op.body : {}) as Record<string, unknown>,
+          userId,
+          deviceName: op.deviceName || deviceName,
+          idempotencyKey: String(op.idempotencyKey || operationId),
+          operationId,
+        });
+        if (!dispatchRes.ok) {
+          errors.push(`${op.descriptionAr || op.endpoint}: ${String(dispatchRes.data?.error || dispatchRes.status)}`);
+        } else {
+          if (operationId) {
+            store.recordSyncOperationResult(
+              operationId,
+              userId,
+              opMethod,
+              op.endpoint,
+              dispatchRes.data,
+              dispatchRes.entityType,
+              dispatchRes.entityId
+            );
           }
-        } catch (err: unknown) {
-          errors.push(`${op.descriptionAr || op.endpoint}: ${(err as Error).message}`);
+          uploaded += 1;
         }
       }
 
@@ -1374,60 +1854,155 @@ function handleApi(app: express.Express) {
       res.status(400).json({ error: (e as Error).message });
     }
   });
+
+  // Favorite Custom Reports & Shared Search Filters
+  app.post('/api/reports/favorites', (req: Request, res: Response) => {
+    try {
+      const { userId, deviceName } = getActor(req);
+      const preset = store.saveFavoriteReport(userId, req.body, deviceName);
+      broadcastStateChange(userId, `حفظ تقرير مفضل: ${preset.title}`);
+      res.status(201).json({ preset, state: store.getStateForUser(userId) });
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.delete('/api/reports/favorites/:id', (req: Request, res: Response) => {
+    try {
+      const { userId } = getActor(req);
+      const result = store.deleteFavoriteReport(userId, String(req.params.id));
+      broadcastStateChange(userId, 'إزالة تقرير مفضل');
+      res.json({ ...result, state: store.getStateForUser(userId) });
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.post('/api/search/filters', (req: Request, res: Response) => {
+    try {
+      const { userId, deviceName } = getActor(req);
+      const filter = store.saveSharedSearchFilter(userId, req.body, deviceName);
+      broadcastStateChange(userId, `حفظ فلتر بحث: ${filter.name}`);
+      res.status(201).json({ filter, state: store.getStateForUser(userId) });
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.delete('/api/search/filters/:id', (req: Request, res: Response) => {
+    try {
+      const { userId } = getActor(req);
+      const result = store.deleteSharedSearchFilter(userId, String(req.params.id));
+      broadcastStateChange(userId, 'حذف فلتر بحث');
+      res.json({ ...result, state: store.getStateForUser(userId) });
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  // Custom Disk Storage Endpoints (Backups / Archive / Documents)
+  app.get('/api/storage/status', (_req: Request, res: Response) => {
+    try {
+      res.json(store.getStorageStatus());
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
+
+  app.post('/api/storage/validate-path', (req: Request, res: Response) => {
+    try {
+      const result = store.validateStorageFolder(String(req.body?.path || ''));
+      res.json(result);
+    } catch (e: unknown) {
+      res.status(400).json({ ok: false, error: (e as Error).message });
+    }
+  });
+
+  app.post('/api/storage/sync-folders', (req: Request, res: Response) => {
+    try {
+      const { userId, deviceName } = getActor(req);
+      const result = store.syncFoldersToDisk(userId, deviceName);
+      broadcastStateChange(userId, 'مزامنة وتهيئة مجلدات التخزين المحلية على القرص');
+      res.json({ ...result, status: store.getStorageStatus(), state: store.getStateForUser(userId) });
+    } catch (e: unknown) {
+      res.status(400).json({ error: (e as Error).message });
+    }
+  });
 }
 
-async function startServer() {
+export async function startServer(customPort?: number) {
+  const listenPort = customPort && Number.isFinite(customPort) ? customPort : PORT;
   const app = express();
   handleApi(app);
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
+  wss.on('error', (err) => {
+    console.error('WebSocketServer error:', err.message);
+  });
 
   wss.on('connection', (ws, req) => {
-    const sessionId = `ses-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const fallbackSessionId = `ses-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const ipAddress = extractClientIp(req);
+    const workspaceId = resolveRequestWorkspaceId(req);
+    const wsStore = getExistingWorkspaceStore(workspaceId);
+    const upgradeActor = wsStore ? resolveSessionActor(req) : null;
+
     activeSessions.set(ws, {
       ws,
-      sessionId,
-      userId: 'usr-gm',
-      deviceName: 'Web Browser',
+      workspaceId,
+      sessionId: upgradeActor?.sessionId || fallbackSessionId,
+      userId: upgradeActor?.userId || '',
+      authenticated: Boolean(upgradeActor),
+      deviceName: upgradeActor?.deviceName || 'Web Browser',
       ipAddress,
       connectedAt: new Date().toISOString(),
     });
+
+    if (upgradeActor && wsStore) {
+      ws.send(
+        JSON.stringify({
+          type: 'state:init',
+          state: wsStore.getStateForUser(upgradeActor.userId),
+          presence: getPresenceList(workspaceId),
+        })
+      );
+      broadcastPresence(workspaceId);
+    }
 
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(String(raw));
         if (msg.type === 'session:identify') {
           const prev = activeSessions.get(ws);
-          const nextUserId = String(msg.userId || 'usr-gm');
-          const nextDevice = String(msg.deviceName || 'Web Browser');
-          const shouldLogLogin = !prev || prev.userId !== nextUserId;
+          const msgWsId = prev?.workspaceId || workspaceId;
+          const activeWsStore = getExistingWorkspaceStore(msgWsId);
+          const verifiedActor = activeWsStore
+            ? resolveSessionActor(req, typeof msg.token === 'string' ? msg.token : undefined)
+            : null;
+          if (!verifiedActor || !activeWsStore) {
+            ws.send(JSON.stringify({ type: 'auth:required', error: 'جلسة WebSocket غير مصرح بها' }));
+            return;
+          }
+          const nextDevice = String(msg.deviceName || verifiedActor.deviceName || 'Web Browser');
           activeSessions.set(ws, {
             ws,
-            sessionId: prev?.sessionId || sessionId,
-            userId: nextUserId,
+            workspaceId: msgWsId,
+            sessionId: verifiedActor.sessionId || prev?.sessionId || fallbackSessionId,
+            userId: verifiedActor.userId,
+            authenticated: true,
             deviceName: nextDevice,
             ipAddress,
             connectedAt: prev?.connectedAt || new Date().toISOString(),
           });
-          if (shouldLogLogin) {
-            store.recordLoginEvent({
-              userId: nextUserId,
-              deviceName: nextDevice,
-              ipAddress,
-              method: 'كلمة المرور',
-              success: true,
-            });
-          }
           ws.send(
             JSON.stringify({
               type: 'state:init',
-              state: store.getStateForUser(nextUserId),
-              presence: getPresenceList(),
+              state: activeWsStore.getStateForUser(verifiedActor.userId),
+              presence: getPresenceList(msgWsId),
             })
           );
-          broadcastPresence();
+          broadcastPresence(msgWsId);
         }
       } catch {
         // Ignore malformed WS payloads
@@ -1435,28 +2010,50 @@ async function startServer() {
     });
 
     ws.on('close', () => {
+      const closed = activeSessions.get(ws);
       activeSessions.delete(ws);
-      broadcastPresence();
+      broadcastPresence(closed?.workspaceId || workspaceId);
     });
   });
 
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
+      server: { middlewareMode: true, hmr: false, ws: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
+    const distDir = process.env.AQARPLUS_DIST_DIR
+      ? path.resolve(process.env.AQARPLUS_DIST_DIR)
+      : path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`AqarPlus centralized server running on http://0.0.0.0:${PORT}`);
+  server.on('error', (err) => {
+    console.error('HTTP Server error:', err);
   });
+
+  server.on('close', () => {
+    for (const st of workspaceStores.values()) {
+      st.getPersistence().close();
+    }
+    workspaceStores.clear();
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(listenPort, '0.0.0.0', () => {
+      console.log(`AqarPlus centralized server running on http://0.0.0.0:${listenPort}`);
+      resolve();
+    });
+  });
+
+  return { server, port: listenPort };
 }
 
-startServer();
+if (process.env.AQARPLUS_NO_AUTO_START !== '1') {
+  startServer();
+}

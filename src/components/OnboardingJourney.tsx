@@ -120,7 +120,7 @@ export function OnboardingJourney({
   isLockMode = false,
   onComplete,
 }: OnboardingJourneyProps) {
-  const { state, lang, mutate, pushToast, setActiveNav } = useAqar();
+  const { state, currentUser, lang, mutate, pushToast, setActiveNav, loginWithPin, changeCredentials } = useAqar();
 
   const savedPin = typeof window !== 'undefined' ? localStorage.getItem(PIN_STORAGE_KEY) : null;
   const [stage, setStage] = useState<OnboardingStage>(initialStage);
@@ -193,24 +193,36 @@ export function OnboardingJourney({
     setPinInput((p) => p.slice(0, -1));
   };
 
-  const handlePinSubmit = () => {
+  const handlePinSubmit = async () => {
     triggerHaptic();
     if (pinInput.length < 4) {
       setPinError(lang === 'ar' ? 'يرجى إدخال رمز مكون من 4 أرقام' : 'Please enter a 4-digit PIN');
       return;
     }
-    if (isLockMode && savedPin && pinInput !== savedPin) {
-      setPinError(lang === 'ar' ? 'رمز الدخول غير صحيح' : 'Incorrect PIN');
-      setPinInput('');
-      return;
-    }
-    localStorage.setItem(PIN_STORAGE_KEY, pinInput);
-    localStorage.setItem(BIOMETRIC_STORAGE_KEY, biometricEnabled ? '1' : '0');
     if (isLockMode) {
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        const res = await loginWithPin(currentUser?.id || 'usr-sys_owner', pinInput);
+        if (!res.ok) {
+          setPinError(res.error || (lang === 'ar' ? 'رمز الدخول غير صحيح' : 'Incorrect PIN'));
+          setPinInput('');
+          return;
+        }
+      } else if (savedPin && pinInput !== savedPin) {
+        setPinError(lang === 'ar' ? 'رمز الدخول غير صحيح' : 'Incorrect PIN');
+        setPinInput('');
+        return;
+      }
+      localStorage.setItem(PIN_STORAGE_KEY, pinInput);
+      localStorage.setItem(BIOMETRIC_STORAGE_KEY, biometricEnabled ? '1' : '0');
       localStorage.setItem(ONBOARDING_DONE_KEY, 'done');
       onComplete();
       return;
     }
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      await changeCredentials({ targetUserId: currentUser?.id, newPin: pinInput });
+    }
+    localStorage.setItem(PIN_STORAGE_KEY, pinInput);
+    localStorage.setItem(BIOMETRIC_STORAGE_KEY, biometricEnabled ? '1' : '0');
     setStage('company');
   };
 

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   LayoutDashboard,
   Building2,
@@ -24,9 +24,13 @@ import {
   Sparkles,
   Archive,
   MessageSquareText,
+  CalendarCheck,
+  SlidersHorizontal,
+  LogOut,
 } from 'lucide-react';
 import { NavSection, PrimaryNavSection, useAqar } from '../context/AqarContext';
 import { formatDateTime } from '../utils/formatters';
+import { GlobalSearchModal, fuzzyMatchScore } from './GlobalSearchModal';
 import { PrintViewButton } from './PrintViewButton';
 
 interface LayoutShellProps {
@@ -55,11 +59,25 @@ export function LayoutShell({ children }: LayoutShellProps) {
     dismissToast,
     mutate,
     openOnboarding,
+    logout,
   } = useAqar();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [notifPriorityFilter, setNotifPriorityFilter] = useState<'all' | 'عاجل' | 'عادي' | 'منخفض'>('all');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setGlobalSearchOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const navItems: {
     id: PrimaryNavSection;
@@ -69,6 +87,7 @@ export function LayoutShell({ children }: LayoutShellProps) {
     ownerAllowed?: boolean;
   }[] = [
     { id: 'dashboard', labelAr: 'لوحة التحكم', labelEn: 'Dashboard', icon: LayoutDashboard, ownerAllowed: true },
+    { id: 'daily_hub', labelAr: 'مهام اليوم والتنبيهات', labelEn: 'Today & Alerts', icon: CalendarCheck, ownerAllowed: false },
     { id: 'properties', labelAr: 'العقارات', labelEn: 'Properties', icon: Building2, ownerAllowed: true },
     { id: 'leasing_finance', labelAr: 'الإيجارات والمالية', labelEn: 'Leasing & Finance', icon: Wallet, ownerAllowed: true },
     { id: 'tenants', labelAr: 'المستأجرون والمهتمون', labelEn: 'Tenants & Leads', icon: Users, ownerAllowed: true },
@@ -100,51 +119,84 @@ export function LayoutShell({ children }: LayoutShellProps) {
 
   const roleNotifications = useMemo(() => {
     if (!state || !currentUser) return [];
-    return state.notifications.filter((n) => n.targetRoles.includes(currentUser.role)).slice(0, 12);
-  }, [state, currentUser]);
+    const list = state.notifications
+      .filter((n) => n.targetRoles.includes(currentUser.role))
+      .map((n) => {
+        const text = `${n.titleAr} ${n.messageAr}`;
+        const derivedPriority: 'عاجل' | 'عادي' | 'منخفض' =
+          /عاجل|متأخر|منتهي|حرج/.test(text)
+            ? 'عاجل'
+            : n.category === 'مالية' || n.category === 'تشغيلية'
+            ? 'عادي'
+            : 'منخفض';
+        return { ...n, derivedPriority };
+      });
+    return list
+      .filter((n) => notifPriorityFilter === 'all' || n.derivedPriority === notifPriorityFilter)
+      .slice(0, 12);
+  }, [state, currentUser, notifPriorityFilter]);
 
   const searchResults = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q || !state) return [];
-    const results: { typeAr: string; typeEn: string; title: string; subtitle: string; nav: NavSection }[] = [];
+    const rawQ = searchQuery.trim();
+    if (!rawQ || !state) return [];
+    const results: { typeAr: string; typeEn: string; title: string; subtitle: string; nav: NavSection; score: number }[] = [];
 
     for (const p of state.properties) {
-      if (p.nameAr.toLowerCase().includes(q) || p.code.toLowerCase().includes(q) || p.district.toLowerCase().includes(q)) {
-        results.push({ typeAr: 'عقار', typeEn: 'Property', title: p.nameAr, subtitle: `${p.code} · ${p.district}`, nav: 'properties' });
+      const score = fuzzyMatchScore(`${p.nameAr} ${p.nameEn} ${p.code} ${p.district} ${p.city}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'عقار', typeEn: 'Property', title: p.nameAr, subtitle: `${p.code} · ${p.district}`, nav: 'properties', score });
       }
     }
     for (const u of state.units) {
-      if (u.unitNumber.toLowerCase().includes(q) || u.status.toLowerCase().includes(q)) {
-        const prop = state.properties.find((p) => p.id === u.propertyId);
-        results.push({ typeAr: 'وحدة', typeEn: 'Unit', title: `${u.unitType} ${u.unitNumber}`, subtitle: `${prop?.nameAr || ''} · ${u.status}`, nav: 'properties' });
+      const prop = state.properties.find((p) => p.id === u.propertyId);
+      const score = fuzzyMatchScore(`${u.unitNumber} ${u.status} ${u.unitType} ${prop?.nameAr || ''}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'وحدة', typeEn: 'Unit', title: `${u.unitType} ${u.unitNumber}`, subtitle: `${prop?.nameAr || ''} · ${u.status}`, nav: 'properties', score });
       }
     }
     for (const t of state.tenants) {
-      if (t.nameAr.toLowerCase().includes(q) || t.nationalIdOrIqama.includes(q) || t.phone.includes(q)) {
-        results.push({ typeAr: 'مستأجر', typeEn: 'Tenant', title: t.nameAr, subtitle: `${t.nationalIdOrIqama} · ${t.phone}`, nav: 'tenants' });
+      const score = fuzzyMatchScore(`${t.nameAr} ${t.nameEn} ${t.nationalIdOrIqama} ${t.phone}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'مستأجر', typeEn: 'Tenant', title: t.nameAr, subtitle: `${t.nationalIdOrIqama} · ${t.phone}`, nav: 'tenants', score });
       }
     }
     for (const c of state.contracts) {
-      if (c.internalNumber.toLowerCase().includes(q) || c.ejarNumber.toLowerCase().includes(q)) {
-        results.push({ typeAr: 'عقد', typeEn: 'Contract', title: c.internalNumber, subtitle: `إيجار: ${c.ejarNumber || 'غير موثق'} · ${c.lifecycleStatus}`, nav: 'leasing' });
+      const score = fuzzyMatchScore(`${c.internalNumber} ${c.ejarNumber || ''} ${c.lifecycleStatus}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'عقد', typeEn: 'Contract', title: c.internalNumber, subtitle: `إيجار: ${c.ejarNumber || 'غير موثق'} · ${c.lifecycleStatus}`, nav: 'leasing', score });
       }
     }
     for (const pay of state.payments) {
-      if (pay.receiptNumber.toLowerCase().includes(q)) {
-        results.push({ typeAr: 'سند قبض', typeEn: 'Receipt', title: pay.receiptNumber, subtitle: `${pay.amount.toLocaleString()} ر.س · ${pay.paymentMethod}`, nav: 'finance' });
+      const score = fuzzyMatchScore(`${pay.receiptNumber} ${pay.paymentMethod} ${pay.amount}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'سند قبض', typeEn: 'Receipt', title: pay.receiptNumber, subtitle: `${pay.amount.toLocaleString()} ر.س · ${pay.paymentMethod}`, nav: 'finance', score });
+      }
+    }
+    for (const exp of state.expenses || []) {
+      const score = fuzzyMatchScore(`${exp.expenseNumber} ${exp.category} ${exp.notes || ''}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'مصروف', typeEn: 'Expense', title: `${exp.expenseNumber} · ${exp.category}`, subtitle: `${exp.amount.toLocaleString()} ر.س · ${exp.approvalStatus}`, nav: 'accounting', score });
+      }
+    }
+    for (const task of state.tasks || []) {
+      const score = fuzzyMatchScore(`${task.title} ${task.type} ${task.status}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'مهمة', typeEn: 'Task', title: task.title, subtitle: `${task.type} · ${task.dueDate} · ${task.status}`, nav: 'daily_hub', score });
       }
     }
     for (const tkt of state.tickets) {
-      if (tkt.ticketNumber.toLowerCase().includes(q) || tkt.title.toLowerCase().includes(q)) {
-        results.push({ typeAr: 'صيانة', typeEn: 'Ticket', title: `${tkt.ticketNumber} · ${tkt.title}`, subtitle: `${tkt.category} · ${tkt.status}`, nav: 'maintenance' });
+      const score = fuzzyMatchScore(`${tkt.ticketNumber} ${tkt.title} ${tkt.category}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'صيانة', typeEn: 'Ticket', title: `${tkt.ticketNumber} · ${tkt.title}`, subtitle: `${tkt.category} · ${tkt.status}`, nav: 'maintenance', score });
       }
     }
     for (const doc of state.documents) {
-      if (doc.title.toLowerCase().includes(q) || doc.category.toLowerCase().includes(q)) {
-        results.push({ typeAr: 'مستند', typeEn: 'Document', title: doc.title, subtitle: `${doc.category} · ${doc.fileName}`, nav: 'documents' });
+      const score = fuzzyMatchScore(`${doc.title} ${doc.category} ${doc.fileName}`, rawQ);
+      if (score > 0) {
+        results.push({ typeAr: 'مستند', typeEn: 'Document', title: doc.title, subtitle: `${doc.category} · ${doc.fileName}`, nav: 'documents', score });
       }
     }
-    return results.slice(0, 8);
+    return results.sort((a, b) => b.score - a.score).slice(0, 8);
   }, [searchQuery, state]);
 
   return (
@@ -164,7 +216,7 @@ export function LayoutShell({ children }: LayoutShellProps) {
                 />
               ) : (
                 <img
-                  src="/assets/aistudio/Aqar_plus_8de53ba4.svg"
+                  src="./assets/aistudio/Aqar_plus_8de53ba4.svg"
                   alt="AqarPlus"
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-contain p-1"
@@ -237,7 +289,7 @@ export function LayoutShell({ children }: LayoutShellProps) {
                 />
               ) : (
                 <img
-                  src="/assets/aistudio/Aqar_plus_8de53ba4.svg"
+                  src="./assets/aistudio/Aqar_plus_8de53ba4.svg"
                   alt="AqarPlus"
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-contain p-1"
@@ -250,62 +302,89 @@ export function LayoutShell({ children }: LayoutShellProps) {
           </div>
 
           {/* Global Search */}
-          <div className="relative hidden md:block flex-1 max-w-md">
-            <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3 pointer-events-none" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={
-                lang === 'ar'
-                  ? 'بحث شامل: مستأجر، وحدة، عقد، سند، بلاغ...'
-                  : 'Global search: tenant, unit, contract, receipt...'
-              }
-              className="w-full ps-9 pe-8 py-1.5 text-sm rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]/80 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#26478D]"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute top-1/2 -translate-y-1/2 end-2.5 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+          <div className="relative hidden md:flex items-center gap-2 flex-1 max-w-lg">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={
+                  lang === 'ar'
+                    ? 'بحث ذكي شامل (Ctrl+K): مستأجر، وحدة، عقد، سند...'
+                    : 'Fuzzy global search (Ctrl+K)...'
+                }
+                className="w-full ps-9 pe-8 py-1.5 text-sm rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]/80 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#26478D]"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute top-1/2 -translate-y-1/2 end-2.5 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
 
-            {searchQuery.trim() && (
-              <div className="absolute top-full mt-2 inset-x-0 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] shadow-xl overflow-hidden z-50">
-                {searchResults.length === 0 ? (
-                  <div className="p-4 text-xs text-slate-500 text-center">
-                    {lang === 'ar' ? 'لا توجد نتائج مطابقة' : 'No matching records'}
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-100 dark:divide-white/5">
-                    {searchResults.map((r, i) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          setActiveNav(r.nav);
-                          setSearchQuery('');
-                        }}
-                        className="w-full px-4 py-2.5 text-start hover:bg-slate-50 dark:hover:bg-white/[0.05] flex items-center justify-between gap-3 cursor-pointer"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium truncate">{r.title}</div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 truncate">{r.subtitle}</div>
-                        </div>
-                        <span className="text-[11px] font-medium text-[#26478D] dark:text-blue-400 shrink-0">
-                          {lang === 'ar' ? r.typeAr : r.typeEn}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+              {searchQuery.trim() && (
+                <div className="absolute top-full mt-2 inset-x-0 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] shadow-xl overflow-hidden z-50">
+                  {searchResults.length === 0 ? (
+                    <div className="p-4 text-xs text-slate-500 text-center">
+                      {lang === 'ar' ? 'لا توجد نتائج مطابقة' : 'No matching records'}
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-white/5">
+                      {searchResults.map((r, i) => (
+                        <button
+                          key={i}
+                          onClick={() => {
+                            setActiveNav(r.nav);
+                            setSearchQuery('');
+                          }}
+                          className="w-full px-4 py-2.5 text-start hover:bg-slate-50 dark:hover:bg-white/[0.05] flex items-center justify-between gap-3 cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium truncate">{r.title}</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 truncate">{r.subtitle}</div>
+                          </div>
+                          <span className="text-[11px] font-medium text-[#26478D] dark:text-blue-400 shrink-0">
+                            {lang === 'ar' ? r.typeAr : r.typeEn}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setGlobalSearchOpen(true)}
+                    className="w-full px-4 py-2 text-xs font-semibold text-[#26478D] dark:text-blue-400 bg-slate-50 dark:bg-white/[0.03] border-t border-slate-100 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/[0.06] flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    <span>{lang === 'ar' ? 'فتح البحث المتقدم والفلاتر المركّبة' : 'Open Advanced Search & Filters'}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setGlobalSearchOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer whitespace-nowrap shrink-0"
+              title={lang === 'ar' ? 'البحث الشامل المتقدم والفلاتر المشتركة' : 'Advanced Global Search'}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-[#26478D] dark:text-blue-400" />
+              <span className="hidden xl:inline">{lang === 'ar' ? 'فلاتر متقدمة' : 'Filters'}</span>
+            </button>
           </div>
 
           {/* Right Action Controls */}
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setGlobalSearchOpen(true)}
+              className="md:hidden p-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+              aria-label="Global Search"
+            >
+              <Search className="w-4 h-4" />
+            </button>
             {/* Offline & Sync Control */}
             <button
               onClick={toggleOfflineSimulation}
@@ -410,6 +489,17 @@ export function LayoutShell({ children }: LayoutShellProps) {
                       <Sparkles className="w-3.5 h-3.5" />
                       <span>{lang === 'ar' ? 'معالج البداية' : 'Setup Wizard'}</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        void logout();
+                      }}
+                      className="col-span-2 flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg text-[11px] font-semibold border border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'تسجيل الخروج من الحساب' : 'Sign Out'}</span>
+                    </button>
                   </div>
                 </div>
               )}
@@ -456,9 +546,17 @@ export function LayoutShell({ children }: LayoutShellProps) {
               </button>
 
               {notifOpen && (
-                <div className="absolute end-0 top-full mt-2 w-80 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] shadow-2xl overflow-hidden z-50">
+                <div className="absolute end-0 top-full mt-2 w-80 sm:w-96 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] shadow-2xl overflow-hidden z-50">
                   <div className="px-4 py-2.5 border-b border-slate-100 dark:border-white/10 flex items-center justify-between">
-                    <span className="text-xs font-semibold">{lang === 'ar' ? 'التنبيهات المباشرة' : 'Notifications'}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold">{lang === 'ar' ? 'التنبيهات المباشرة' : 'Notifications'}</span>
+                      {(currentUser?.notificationPrefs?.dndEnabled || state?.settings.notificationsCenter?.workHoursEnabled) && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400">
+                          <Moon className="w-3 h-3" />
+                          DND
+                        </span>
+                      )}
+                    </div>
                     {unreadNotifications.length > 0 && (
                       <button
                         onClick={() => mutate('POST', '/api/notifications/read')}
@@ -468,10 +566,38 @@ export function LayoutShell({ children }: LayoutShellProps) {
                       </button>
                     )}
                   </div>
+                  <div className="px-3 py-2 border-b border-slate-100 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.02] flex items-center justify-between gap-1 text-[11px]">
+                    <div className="flex items-center gap-1">
+                      {(['all', 'عاجل', 'عادي', 'منخفض'] as const).map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setNotifPriorityFilter(p)}
+                          className={`px-2 py-0.5 rounded font-medium cursor-pointer ${
+                            notifPriorityFilter === p
+                              ? 'bg-[#26478D] text-white'
+                              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-white/10'
+                          }`}
+                        >
+                          {p === 'all' ? 'الكل' : p}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotifOpen(false);
+                        setActiveNav('settings');
+                      }}
+                      className="text-[10px] text-[#26478D] dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      تخصيص
+                    </button>
+                  </div>
                   <div className="divide-y divide-slate-100 dark:divide-white/5 max-h-80 overflow-y-auto">
                     {roleNotifications.length === 0 ? (
                       <div className="p-4 text-xs text-slate-500 text-center">
-                        {lang === 'ar' ? 'لا توجد تنبيهات حالية' : 'No notifications'}
+                        {lang === 'ar' ? 'لا توجد تنبيهات مطابقة' : 'No matching notifications'}
                       </div>
                     ) : (
                       roleNotifications.map((n) => (
@@ -484,7 +610,7 @@ export function LayoutShell({ children }: LayoutShellProps) {
                           className="w-full px-4 py-3 text-start hover:bg-slate-50 dark:hover:bg-white/[0.04] space-y-1 cursor-pointer"
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold">{lang === 'ar' ? n.titleAr : n.titleEn}</span>
+                            <span className="text-xs font-semibold truncate">{lang === 'ar' ? n.titleAr : n.titleEn}</span>
                             <span className="text-[10px] text-slate-400 font-mono-num shrink-0">
                               {formatDateTime(n.createdAt, lang)}
                             </span>
@@ -584,6 +710,12 @@ export function LayoutShell({ children }: LayoutShellProps) {
           </div>
         ))}
       </div>
+      {/* Unified Fuzzy Global Search & Compound Filters Modal */}
+      <GlobalSearchModal
+        open={globalSearchOpen}
+        initialQuery={searchQuery}
+        onClose={() => setGlobalSearchOpen(false)}
+      />
     </div>
   );
 }

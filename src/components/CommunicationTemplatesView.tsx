@@ -213,6 +213,26 @@ export function CommunicationTemplatesView() {
     return { total, sentToday, topTemplate, responseRate, byChannel };
   }, [combinedLogs, templates]);
 
+  const activeRecipientDetails = useMemo(() => {
+    if (!state) {
+      return { name: '—', phone: '', email: '', targetType: 'مستأجر' as const };
+    }
+    if (recipientType === 'tenant') {
+      const t = state.tenants.find((x) => x.id === recipientId) || state.tenants[0];
+      return { name: t?.nameAr || '—', phone: t?.phone || '', email: t?.email || '', targetType: 'مستأجر' as const };
+    }
+    if (recipientType === 'owner') {
+      const o = state.owners.find((x) => x.id === recipientId) || state.owners[0];
+      return { name: o?.nameAr || '—', phone: o?.phone || '', email: o?.email || '', targetType: 'مالك' as const };
+    }
+    if (recipientType === 'vendor') {
+      const v = state.vendors.find((x) => x.id === recipientId) || state.vendors[0];
+      return { name: v?.nameAr || '—', phone: v?.phone || '', email: v?.email || '', targetType: 'مورد' as const };
+    }
+    const u = state.users.find((x) => x.id === recipientId) || state.users[0];
+    return { name: u?.nameAr || '—', phone: u?.phone || '', email: u?.email || '', targetType: 'موظف' as const };
+  }, [recipientType, recipientId, state]);
+
   if (!state) return null;
 
   const openCreateEditor = () => {
@@ -385,22 +405,6 @@ export function CommunicationTemplatesView() {
     }
   };
 
-  const activeRecipientDetails = useMemo(() => {
-    if (recipientType === 'tenant') {
-      const t = state.tenants.find((x) => x.id === recipientId) || state.tenants[0];
-      return { name: t?.nameAr || '—', phone: t?.phone || '', email: t?.email || '', targetType: 'مستأجر' as const };
-    }
-    if (recipientType === 'owner') {
-      const o = state.owners.find((x) => x.id === recipientId) || state.owners[0];
-      return { name: o?.nameAr || '—', phone: o?.phone || '', email: o?.email || '', targetType: 'مالك' as const };
-    }
-    if (recipientType === 'vendor') {
-      const v = state.vendors.find((x) => x.id === recipientId) || state.vendors[0];
-      return { name: v?.nameAr || '—', phone: v?.phone || '', email: v?.email || '', targetType: 'مورد' as const };
-    }
-    const u = state.users.find((x) => x.id === recipientId) || state.users[0];
-    return { name: u?.nameAr || '—', phone: u?.phone || '', email: u?.email || '', targetType: 'موظف' as const };
-  }, [recipientType, recipientId, state]);
 
   const handleLogAndDispatch = async (via: 'log' | 'copy') => {
     if (!useModalTemplate) return;

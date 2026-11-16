@@ -7,6 +7,7 @@ import React from 'react';
 import { AqarProvider, useAqar } from './context/AqarContext';
 import { LayoutShell } from './components/LayoutShell';
 import { DashboardView } from './components/DashboardView';
+import { DailyTasksAlertsView } from './components/DailyTasksAlertsView';
 import { PropertiesUnitsView } from './components/PropertiesUnitsView';
 import { TenantsCrmView } from './components/TenantsCrmView';
 import { LeasingFinanceHubView } from './components/LeasingFinanceHubView';
@@ -19,11 +20,17 @@ import { CommunicationTemplatesView } from './components/CommunicationTemplatesV
 import { OnboardingJourney } from './components/OnboardingJourney';
 import { TeamWorkforceView } from './components/TeamWorkforceView';
 import { PublicProspectViews } from './components/PublicProspectViews';
+import { AuthLoginScreen } from './components/AuthLoginScreen';
+import { PwaInstallBanner } from './components/PwaInstallBanner';
 
 function AqarWorkspace() {
-  const { loading, state, activeNav, lang, onboardingConfig, closeOnboarding } = useAqar();
+  const { authChecking, isAuthenticated, loading, state, activeNav, lang, onboardingConfig, closeOnboarding } = useAqar();
 
-  if (loading || !state) {
+  if (!authChecking && !isAuthenticated) {
+    return <AuthLoginScreen />;
+  }
+
+  if (authChecking || loading || !state) {
     return (
       <div className="min-h-screen flex bg-slate-50 dark:bg-[#0A0E1A] text-slate-900 dark:text-slate-100">
         {/* Sidebar Skeleton */}
@@ -31,7 +38,7 @@ function AqarWorkspace() {
           <div className="flex items-center gap-3 pb-3 border-b border-slate-200 dark:border-white/10">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#26478D] to-[#0A0E1A] text-white flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden border border-white/15">
               <img
-                src="/assets/aistudio/Aqar_plus_8de53ba4.svg"
+                src="./assets/aistudio/Aqar_plus_8de53ba4.svg"
                 alt="AqarPlus"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-contain p-1"
@@ -55,7 +62,7 @@ function AqarWorkspace() {
             <div className="flex items-center gap-3">
               <div className="lg:hidden w-8 h-8 rounded-lg bg-gradient-to-br from-[#26478D] to-[#0A0E1A] text-white flex items-center justify-center font-bold text-xs overflow-hidden border border-white/15">
                 <img
-                  src="/assets/aistudio/Aqar_plus_8de53ba4.svg"
+                  src="./assets/aistudio/Aqar_plus_8de53ba4.svg"
                   alt="AqarPlus"
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-contain p-1"
@@ -123,6 +130,7 @@ function AqarWorkspace() {
     <>
       <LayoutShell>
         {activeNav === 'dashboard' && <DashboardView />}
+        {activeNav === 'daily_hub' && <DailyTasksAlertsView />}
         {activeNav === 'properties' && <PropertiesUnitsView />}
         {activeNav === 'leasing_finance' && <LeasingFinanceHubView />}
         {activeNav === 'tenants' && <TenantsCrmView />}
@@ -143,6 +151,7 @@ function AqarWorkspace() {
           onComplete={closeOnboarding}
         />
       )}
+      <PwaInstallBanner />
     </>
   );
 }

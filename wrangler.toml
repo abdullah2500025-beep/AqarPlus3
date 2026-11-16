@@ -1,0 +1,29 @@
+name = "aqarplus-rems"
+main = "worker/src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[durable_objects.bindings]]
+name = "WORKSPACE_DO"
+class_name = "AqarWorkspaceDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AqarWorkspaceDO"]
+
+[vars]
+AQAR_DEMO_LOGIN = "false"
+
+# Secrets to configure before production deploy:
+# npx wrangler secret put AQAR_SESSION_SECRET
+# npx wrangler secret put GEMINI_API_KEY
+#
+# Optional Cloudflare R2 (10GB free tier, requires billing card on file in Cloudflare Dashboard):
+# [[r2_buckets]]
+# binding = "AQAR_FILES"
+# bucket_name = "aqarplus-files"

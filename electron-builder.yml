@@ -1,0 +1,32 @@
+appId: com.aqarplus.rems
+productName: AqarPlus
+copyright: Copyright © AqarPlus Real Estate Management
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-server/**/*
+  - electron/**/*
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AqarPlus
+  installerLanguages:
+    - ar
+    - en
+portable:
+  artifactName: ${productName}-Portable-${version}-${arch}.${ext}

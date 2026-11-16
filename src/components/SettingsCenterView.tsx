@@ -1,32 +1,46 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
   ArrowLeft,
   Bell,
+  BookUser,
   Building,
   Building2,
+  Calendar,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   CloudCog,
   Code2,
+  CreditCard,
   DatabaseBackup,
   Download,
+  ExternalLink,
   FileCheck2,
   Fingerprint,
+  FolderOpen,
   Globe,
   HardDrive,
+  Home,
   Info,
   KeyRound,
   Landmark,
+  Layers,
+  Link2,
   Lock,
   LogOut,
+  Mail,
   MapPin,
+  MessageSquareText,
+  Navigation,
   Palette,
   Plus,
   Printer,
   QrCode,
+  Radio,
+  Receipt,
   RefreshCw,
   RotateCcw,
   Save,
@@ -36,8 +50,10 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sliders,
+  Smartphone,
   Sparkles,
   Trash2,
+  TrendingUp,
   Upload,
   Wifi,
   X,
@@ -51,9 +67,38 @@ import {
 import { formatCurrency, formatDateTime } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
 import { AboutAppView } from './AboutAppView';
+import { CommunicationTemplatesView } from './CommunicationTemplatesView';
 import { PIN_STORAGE_KEY } from './OnboardingJourney';
-import { PrintViewButton } from './PrintViewButton';
+import { CatalogSettingsSectionId, DEFAULT_CALENDAR_CONFIG, SettingsCatalogSections } from './SettingsCatalogSections';
 import { BottomSheetSelect, GlassToggle, RippleButton } from './SettingsUiPrimitives';
+
+declare global {
+  interface Window {
+    aqarDesktop?: {
+      isElectron: boolean;
+      platform: string;
+      selectFolder: (defaultPath?: string, title?: string) => Promise<string | null>;
+      openPath: (targetPath: string) => Promise<boolean>;
+      getDefaultPaths: () => Promise<{
+        userData: string;
+        backupsDir: string;
+        archiveDir: string;
+        documentsDir: string;
+      }>;
+    };
+  }
+}
+
+interface StorageStatusData {
+  dataDir: string;
+  backupsDir: string;
+  archiveDir: string;
+  documentsDir: string;
+  backupsFilesCount: number;
+  archiveFilesCount: number;
+  documentsFilesCount: number;
+  platform: string;
+}
 
 type SettingsSectionId =
   | 'hub'
@@ -64,11 +109,15 @@ type SettingsSectionId =
   | 'print'
   | 'backup'
   | 'sync'
+  | 'integrations'
   | 'advanced'
-  | 'about';
+  | 'about'
+  | CatalogSettingsSectionId
+  | 'templates';
 
 interface SectionCardMeta {
   id: Exclude<SettingsSectionId, 'hub' | 'about'>;
+  group: 'core' | 'system';
   titleAr: string;
   titleEn: string;
   descAr: string;
@@ -78,11 +127,25 @@ interface SectionCardMeta {
   iconColorClass: string;
 }
 
+const CATALOG_SECTION_IDS: CatalogSettingsSectionId[] = [
+  'contacts',
+  'calendar',
+  'forms',
+  'income_categories',
+  'expense_categories',
+  'liabilities_categories',
+  'payment_methods',
+  'property_types',
+  'unit_types',
+];
+
 const SETTINGS_SECTIONS: SectionCardMeta[] = [
+  // 12 Core AqarPlus Settings Sections
   {
     id: 'company',
-    titleAr: 'إعدادات الشركة والهوية',
-    titleEn: 'Company & Branding',
+    group: 'core',
+    titleAr: '1. بيانات الشركة والهوية',
+    titleEn: '1. Company & Branding',
     descAr: 'البيانات الأساسية، الشعار، الحسابات البنكية، وتخصيص الإيصالات',
     descEn: 'Company profile, logo, bank accounts, multi-company & receipts',
     keywords: 'شركة هوية شعار سجل تجاري رقم ضريبي بنك آيبان إيصال خريطة',
@@ -90,18 +153,143 @@ const SETTINGS_SECTIONS: SectionCardMeta[] = [
     iconColorClass: 'bg-[#26478D]/10 dark:bg-[#26478D]/30 text-[#26478D] dark:text-blue-400',
   },
   {
+    id: 'notifications',
+    group: 'core',
+    titleAr: '2. التواصل والتنبيهات',
+    titleEn: '2. Communication & Alerts',
+    descAr: 'واتساب، البريد الإلكتروني، رسائل SMS الافتراضية وساعات العمل',
+    descEn: 'In-app alerts, push DND hours, WhatsApp, email & SMS defaults',
+    keywords: 'إشعارات تنبيهات استحقاق واتساب بريد إلكتروني SMS ساعات عمل عدم إزعاج',
+    icon: Bell,
+    iconColorClass: 'bg-amber-500/12 text-amber-600 dark:text-amber-400',
+  },
+  {
+    id: 'contacts',
+    group: 'core',
+    titleAr: '3. دفتر جهات الاتصال',
+    titleEn: '3. Contacts Directory',
+    descAr: 'مزامنة الأرقام، معالج استيراد 5 خطوات، تصدير Excel/CSV وتصنيف الجهات',
+    descEn: 'Auto-sync contacts, 5-step import wizard with deduplication & CSV export',
+    keywords: 'جهات اتصال أرقام استيراد تصدير مستأجر مورد مالك',
+    icon: BookUser,
+    iconColorClass: 'bg-sky-500/12 text-sky-600 dark:text-sky-400',
+  },
+  {
+    id: 'calendar',
+    group: 'core',
+    titleAr: '4. التقويم والعطل وأوقات العمل',
+    titleEn: '4. Calendar & Work Hours',
+    descAr: 'التقويم الهجري والميلادي، العطل الرسمية، وضع رمضان، وفترات التنبيه',
+    descEn: 'Hijri/Gregorian calendar, Saudi holidays, Ramadan hours & alert windows',
+    keywords: 'تقويم هجري ميلادي عطل رسمية رمضان أوقات عمل تنبيهات',
+    icon: Calendar,
+    iconColorClass: 'bg-indigo-500/12 text-indigo-600 dark:text-indigo-400',
+  },
+  {
+    id: 'forms',
+    group: 'core',
+    titleAr: '5. النماذج وتخصيص الحقول',
+    titleEn: '5. Custom Forms & Fields',
+    descAr: 'تخصيص حقول المستأجرين، المصاريف، الصيانة، قائمة الفحص، والنماذج المخصصة',
+    descEn: 'Customize tenant, expense, maintenance & handover checklists',
+    keywords: 'نماذج حقول تخصيص إلزامي مخفي فحص تسليم مستأجر مصروف صيانة',
+    icon: ClipboardList,
+    iconColorClass: 'bg-purple-500/12 text-purple-600 dark:text-purple-400',
+  },
+  {
+    id: 'income_categories',
+    group: 'core',
+    titleAr: '6. فئات الدخل والإيرادات',
+    titleEn: '6. Income Categories',
+    descAr: 'إيجارات سكنية وتجارية، مواقف، إعلانات، وربط حسابات الإيراد والضريبة',
+    descEn: 'Manage income categories, GL codes and VAT taxability',
+    keywords: 'فئات دخل إيرادات إيجار سكني تجاري مواقف ضريبة حساب',
+    icon: TrendingUp,
+    iconColorClass: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400',
+  },
+  {
+    id: 'expense_categories',
+    group: 'core',
+    titleAr: '7. فئات المصاريف',
+    titleEn: '7. Expense Categories',
+    descAr: 'تصنيفات الصيانة والتشغيل والإدارة مع الفئات الفرعية وإحصائيات الصرف',
+    descEn: 'Expense categories, sub-categories and live spend breakdown',
+    keywords: 'فئات مصاريف صيانة تشغيل إدارية فرعية ميزانية',
+    icon: Receipt,
+    iconColorClass: 'bg-rose-500/12 text-rose-600 dark:text-rose-400',
+  },
+  {
+    id: 'liabilities_categories',
+    group: 'core',
+    titleAr: '8. فئات الالتزامات وسجل الديون',
+    titleEn: '8. Liabilities & Obligations',
+    descAr: 'القروض البنكية، التمويل، الفواتير الآجلة والرواتب المستحقة مع السداد',
+    descEn: 'Liability categories, loans, payables ledger and installment tracking',
+    keywords: 'التزامات قروض تمويل فواتير آجلة رواتب ضرائب سداد',
+    icon: Layers,
+    iconColorClass: 'bg-orange-500/12 text-orange-600 dark:text-orange-400',
+  },
+  {
+    id: 'payment_methods',
+    group: 'core',
+    titleAr: '9. طرق الدفع والتحصيل',
+    titleEn: '9. Payment Methods',
+    descAr: 'نقدي، تحويل بنكي، شيك، إيجار، مدى والمحافظ مع الرسوم والحساب البنكي',
+    descEn: 'Cash, bank transfer, Ejar, Mada, wallets, fees and bank links',
+    keywords: 'طرق دفع نقدي تحويل بنكي شيك إيجار مدى محافظ رسوم',
+    icon: CreditCard,
+    iconColorClass: 'bg-teal-500/12 text-teal-600 dark:text-teal-400',
+  },
+  {
+    id: 'property_types',
+    group: 'core',
+    titleAr: '10. أنواع العقارات',
+    titleEn: '10. Property Types',
+    descAr: 'عمائر، مجمعات تجارية، فلل، أراضٍ ومخازن مع إعدادات الضريبة الافتراضية',
+    descEn: 'Property classifications, default VAT and live property counts',
+    keywords: 'أنواع عقارات عمارة مجمع فيلا أرض مخزن فندق',
+    icon: Building,
+    iconColorClass: 'bg-cyan-500/12 text-cyan-600 dark:text-cyan-400',
+  },
+  {
+    id: 'unit_types',
+    group: 'core',
+    titleAr: '11. أنواع الوحدات',
+    titleEn: '11. Unit Types',
+    descAr: 'شقق، مكاتب، معارض، مواقف وأجنحة مع المساحات والغرف والمرافق الافتراضية',
+    descEn: 'Unit classifications, default areas, rooms, amenities & rent cycle',
+    keywords: 'أنواع وحدات شقة مكتب محل غرفة موقف مخزن مساحة',
+    icon: Home,
+    iconColorClass: 'bg-violet-500/12 text-violet-600 dark:text-violet-400',
+  },
+  {
+    id: 'templates',
+    group: 'core',
+    titleAr: '12. قوالب الرسائل والتواصل',
+    titleEn: '12. Communication Templates',
+    descAr: 'قوالب الواتساب والبريد وSMS مع المتغيرات التلقائية والمعاينة الفورية',
+    descEn: '6-category communication templates with dynamic variables & preview',
+    keywords: 'قوالب رسائل واتساب بريد نصية متغيرات ترحيب استحقاق صيانة',
+    icon: MessageSquareText,
+    iconColorClass: 'bg-blue-500/12 text-blue-600 dark:text-blue-400',
+  },
+
+  // System & Technical Settings
+  {
     id: 'general',
+    group: 'system',
     titleAr: 'إعدادات التطبيق العامة',
     titleEn: 'General Preferences',
-    descAr: 'اللغة، التقويم، تنسيق الأرقام، والوضع الليلي',
-    descEn: 'Language, RTL, calendar, numerals & theme',
-    keywords: 'لغة عربي إنجليزي تقويم هجري ميلادي وضع ليلي منطقة زمنية',
+    descAr: 'اللغة، اتجاه الواجهة، العملة، تنسيق الأرقام، والوضع الليلي',
+    descEn: 'Language, RTL, currency, numerals & theme',
+    keywords: 'لغة عربي إنجليزي تقويم وضع ليلي منطقة زمنية عملة',
     icon: Sliders,
     iconColorClass: 'bg-[#26478D]/10 dark:bg-[#26478D]/30 text-[#26478D] dark:text-blue-400',
   },
   {
     id: 'security',
-    titleAr: 'إعدادات الأمان والخصوصية',
+    group: 'system',
+    titleAr: 'الأمان والخصوصية',
     titleEn: 'Security & Privacy',
     descAr: 'قفل التطبيق، البصمة، القفل التلقائي، وسجل الأجهزة والدخول',
     descEn: 'PIN/Biometrics/Pattern, auto-lock, sensitive gates & login audit',
@@ -110,18 +298,9 @@ const SETTINGS_SECTIONS: SectionCardMeta[] = [
     iconColorClass: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400',
   },
   {
-    id: 'notifications',
-    titleAr: 'إعدادات الإشعارات والتنبيهات',
-    titleEn: 'Notifications',
-    descAr: 'تنبيهات الاستحقاق، ساعات العمل، ورسائل واتساب التلقائية',
-    descEn: 'In-app alerts, push DND hours & automated WhatsApp templates',
-    keywords: 'إشعارات تنبيهات استحقاق واتساب ساعات عمل عدم إزعاج صيانة مهام',
-    icon: Bell,
-    iconColorClass: 'bg-amber-500/12 text-amber-600 dark:text-amber-400',
-  },
-  {
     id: 'print',
-    titleAr: 'إعدادات الطباعة والمشاركة',
+    group: 'system',
+    titleAr: 'الطباعة والمشاركة',
     titleEn: 'Print & Share',
     descAr: 'اكتشاف الطابعات، الطابعة الافتراضية، حجم الورق وقناة المشاركة',
     descEn: 'Bluetooth/USB/Network printers, paper size & default share',
@@ -131,17 +310,19 @@ const SETTINGS_SECTIONS: SectionCardMeta[] = [
   },
   {
     id: 'backup',
-    titleAr: 'إعدادات النسخ الاحتياطي',
+    group: 'system',
+    titleAr: 'النسخ الاحتياطي والاستعادة',
     titleEn: 'Backup & Recovery',
-    descAr: 'النسخ التلقائي، التشفير، مسار الحفظ، ومعاينة الاستعادة',
-    descEn: 'Scheduled backup, encryption, storage path & restore preview',
-    keywords: 'نسخ احتياطي استعادة تشفير سحابة NAS مجلد يومي أسبوعي',
+    descAr: 'النسخ التلقائي، التشفير، مسار الحفظ، والاستعادة الكاملة أو بالدمج الذكي',
+    descEn: 'Scheduled backup, encryption, storage path & replace/merge restore',
+    keywords: 'نسخ احتياطي استعادة دمج استبدال تشفير سحابة NAS مجلد يومي',
     icon: DatabaseBackup,
     iconColorClass: 'bg-[#26478D]/10 dark:bg-[#26478D]/30 text-[#26478D] dark:text-blue-400',
   },
   {
     id: 'sync',
-    titleAr: 'إعدادات المزامنة والشبكة',
+    group: 'system',
+    titleAr: 'المزامنة والشبكة',
     titleEn: 'Sync Settings',
     descAr: 'وضع الخادم الخاص أو LAN، سلوك Wi-Fi، ومعالجة التعارضات',
     descEn: 'Local/Server/LAN sync mode, Wi-Fi policy & conflict resolution',
@@ -150,7 +331,19 @@ const SETTINGS_SECTIONS: SectionCardMeta[] = [
     iconColorClass: 'bg-[#26478D]/10 dark:bg-[#26478D]/30 text-[#26478D] dark:text-blue-400',
   },
   {
+    id: 'integrations',
+    group: 'system',
+    titleAr: 'التكاملات والربط الخارجي',
+    titleEn: 'Integrations & External APIs',
+    descAr: 'واتساب للأعمال، البريد SMTP، بوابة SMS، خرائط، وخارطة إيجار ونفاذ والبنوك',
+    descEn: 'WhatsApp Business, SMTP, SMS Gateway, Maps & Future Ejar/Nafath/Bank APIs',
+    keywords: 'تكامل ربط API واتساب بريد SMTP خرائط إيجار نفاذ أبشر بنوك محاسبة',
+    icon: Link2,
+    iconColorClass: 'bg-sky-500/12 text-sky-600 dark:text-sky-400',
+  },
+  {
     id: 'advanced',
+    group: 'system',
     titleAr: 'الإعدادات المتقدمة والمطور',
     titleEn: 'Advanced & Developer',
     descAr: 'وضع المطور، إدارة التخزين، تنظيف الكاش، ومعلومات البنية',
@@ -165,6 +358,9 @@ interface BackupPreviewData {
   id: string;
   label: string;
   exists: boolean;
+  encrypted?: boolean;
+  requiresPassword?: boolean;
+  decryptionError?: string;
   propertiesCount: number;
   unitsCount: number;
   tenantsCount: number;
@@ -172,6 +368,16 @@ interface BackupPreviewData {
   paymentsCount: number;
   templatesCount: number;
   lastUpdatedAt?: string;
+  diff?: {
+    properties: { added: number; updated: number; unchanged: number };
+    units: { added: number; updated: number; unchanged: number };
+    tenants: { added: number; updated: number; unchanged: number };
+    contracts: { added: number; updated: number; unchanged: number };
+    payments: { added: number; updated: number; unchanged: number };
+    expenses: { added: number; updated: number; unchanged: number };
+    tickets: { added: number; updated: number; unchanged: number };
+    totalChanged: number;
+  };
 }
 
 export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?: SettingsSectionId }) {
@@ -187,11 +393,58 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
     convertToBase,
     openOnboarding,
     setLang,
+    activeNav,
+    setActiveNav,
+    apiFetch,
+    changeCredentials,
   } = useAqar();
 
   const isAr = lang === 'ar';
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    setActiveSection(initialSection);
+  }, [initialSection]);
+
+  const navigateToSection = useCallback((secId: SettingsSectionId) => {
+    triggerHaptic('light');
+    setActiveSection(secId);
+    if (typeof window !== 'undefined') {
+      if (secId !== 'hub') {
+        window.history.pushState({ aqarSettingsSection: secId }, '');
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, []);
+
+  const handleBackToHub = useCallback(() => {
+    triggerHaptic('light');
+    setActiveSection('hub');
+    if (activeNav === 'about') {
+      setActiveNav('settings');
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [activeNav, setActiveNav]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onSettingsHub = () => {
+      setActiveSection('hub');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    const onPopState = () => {
+      setActiveSection((prev) => (prev !== 'hub' ? 'hub' : prev));
+    };
+    window.addEventListener('aqar:settings-hub', onSettingsHub);
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('aqar:settings-hub', onSettingsHub);
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, []);
 
   // Company & Multi-Company State
   const [showAddCompany, setShowAddCompany] = useState(false);
@@ -287,6 +540,20 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
       behavior: 'auto',
       conflictResolution: 'latest_wins',
     },
+    integrationsConfig: state?.settings.integrationsConfig || {
+      whatsappBusinessEnabled: true,
+      whatsappPhoneId: 'WABA-SA-96650000',
+      smtpEnabled: true,
+      smtpHost: 'smtp.aqarplus.sa',
+      smtpPort: 587,
+      smtpSenderEmail: state?.settings.email || 'noreply@aqarplus.sa',
+      smtpUseTls: true,
+      smsGatewayEnabled: false,
+      smsProviderName: 'Unifonic / Yamamah',
+      smsSenderId: 'AqarPlus',
+      mapProvider: 'osm',
+      googleMapsLinked: false,
+    },
   }));
 
   // Sub-modals & interactive states
@@ -305,7 +572,32 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
   const [customPrinterAddress, setCustomPrinterAddress] = useState('');
 
   const [backupEncryptPassword, setBackupEncryptPassword] = useState('');
+  const [backupRestorePassword, setBackupRestorePassword] = useState('');
   const [backupPreview, setBackupPreview] = useState<BackupPreviewData | null>(null);
+  const [restoreMode, setRestoreMode] = useState<'replace' | 'merge'>('replace');
+
+  const [storageStatus, setStorageStatus] = useState<StorageStatusData | null>(null);
+  const [syncingFolders, setSyncingFolders] = useState(false);
+  const [validatingFolder, setValidatingFolder] = useState<string | null>(null);
+
+  const loadStorageStatus = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/storage/status');
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
+        const data = (await res.json()) as StorageStatusData;
+        setStorageStatus(data);
+      }
+    } catch {
+      // ignore transient network errors or static hosting
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    if (activeSection === 'backup') {
+      void loadStorageStatus();
+    }
+  }, [activeSection, loadStorageStatus]);
 
   const [devModeEnabled, setDevModeEnabled] = useState<boolean>(
     () => typeof window !== 'undefined' && localStorage.getItem('aqarplus_developer_mode_v1') === '1'
@@ -357,6 +649,42 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
     const totalMb = ((dbKb + attachmentsKb + tempKb) / 1024).toFixed(2);
     return { dbKb, attachmentsKb, tempKb, totalMb };
   }, [state]);
+
+  const activeSectionMeta = SETTINGS_SECTIONS.find((s) => s.id === activeSection);
+  const ChevronNav = isAr ? ChevronLeft : ChevronRight;
+  const BackArrow = isAr ? ArrowRight : ArrowLeft;
+
+  const SectionSubHeader = useCallback(
+    ({ onSave }: { onSave?: () => void }) => (
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-white/10">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleBackToHub}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+          >
+            <BackArrow className="w-4 h-4" />
+            <span>{isAr ? 'رجوع' : 'Back'}</span>
+          </button>
+          <div>
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              {isAr ? activeSectionMeta?.titleAr : activeSectionMeta?.titleEn}
+            </h2>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              {isAr ? activeSectionMeta?.descAr : activeSectionMeta?.descEn}
+            </p>
+          </div>
+        </div>
+        {onSave && (
+          <RippleButton onClick={onSave}>
+            <Save className="w-3.5 h-3.5" />
+            <span>{isAr ? 'حفظ التغييرات' : 'Save Changes'}</span>
+          </RippleButton>
+        )}
+      </div>
+    ),
+    [BackArrow, activeSectionMeta, handleBackToHub, isAr]
+  );
 
   if (!state) return null;
 
@@ -506,11 +834,21 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
     await savePartialSettings({ printShare: nextPrintShare }, isAr ? 'تمت إضافة الطابعة الشبكية وحفظها' : 'Network printer added');
   };
 
-  const handlePreviewBackup = async (backupId: string, label: string) => {
+  const handlePreviewBackup = async (backupId: string, label: string, overridePassword?: string) => {
     triggerHaptic('light');
+    const pwdToUse = overridePassword !== undefined ? overridePassword : backupEncryptPassword;
     try {
-      const res = await fetch(`/api/backups/${backupId}/preview`);
+      const res = await apiFetch(`/api/backups/${backupId}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwdToUse || undefined }),
+      });
       const data = await res.json();
+      if (!res.ok) {
+        pushToast('error', data?.error || (isAr ? 'تعذر معاينة النسخة الاحتياطية' : 'Backup preview failed'));
+        return;
+      }
+      if (pwdToUse) setBackupRestorePassword(pwdToUse);
       setBackupPreview({ ...data, label });
     } catch {
       pushToast('error', isAr ? 'تعذر معاينة النسخة الاحتياطية' : 'Backup preview failed');
@@ -520,11 +858,24 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
   const handleConfirmRestoreBackup = async () => {
     if (!backupPreview) return;
     triggerHaptic('warning');
-    const res = await mutate('POST', `/api/backups/${backupPreview.id}/restore`);
+    const res = await mutate('POST', `/api/backups/${backupPreview.id}/restore`, {
+      mode: restoreMode,
+      password: backupRestorePassword || backupEncryptPassword || undefined,
+    });
     if (res) {
       triggerHaptic('success');
-      pushToast('success', isAr ? 'تمت استعادة النسخة الاحتياطية بنجاح' : 'Backup restored');
+      pushToast(
+        'success',
+        restoreMode === 'merge'
+          ? isAr
+            ? 'تم دمج السجلات غير المكررة من النسخة الاحتياطية مع إنشاء نسخة أمان قبل الاستعادة'
+            : 'Backup smart-merged cleanly'
+          : isAr
+          ? 'تمت استعادة النسخة الاحتياطية مع إنشاء نسخة أمان تلقائية قبل الاستبدال'
+          : 'Backup restored with safety snapshot'
+      );
       setBackupPreview(null);
+      setBackupRestorePassword('');
     }
   };
 
@@ -560,17 +911,14 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
   if (activeSection === 'about') {
     return (
       <div className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-white/10">
           <button
             type="button"
-            onClick={() => {
-              triggerHaptic('light');
-              setActiveSection('hub');
-            }}
+            onClick={handleBackToHub}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer"
           >
             {isAr ? <ArrowRight className="w-4 h-4" /> : <ArrowLeft className="w-4 h-4" />}
-            <span>{isAr ? 'العودة إلى مركز الإعدادات' : 'Back to Settings Center'}</span>
+            <span>{isAr ? 'رجوع إلى مركز الإعدادات' : 'Back to Settings Center'}</span>
           </button>
           <span className="text-xs text-slate-500 dark:text-slate-400">
             {isAr ? 'الإعدادات · حول التطبيق' : 'Settings · About App'}
@@ -581,41 +929,6 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
     );
   }
 
-  const activeSectionMeta = SETTINGS_SECTIONS.find((s) => s.id === activeSection);
-  const ChevronNav = isAr ? ChevronLeft : ChevronRight;
-  const BackArrow = isAr ? ArrowRight : ArrowLeft;
-
-  const SectionSubHeader = ({ onSave }: { onSave?: () => void }) => (
-    <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200 dark:border-white/10">
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => {
-            triggerHaptic('light');
-            setActiveSection('hub');
-          }}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer"
-        >
-          <BackArrow className="w-4 h-4" />
-          <span>{isAr ? 'مركز الإعدادات' : 'Settings Hub'}</span>
-        </button>
-        <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-white">
-            {isAr ? activeSectionMeta?.titleAr : activeSectionMeta?.titleEn}
-          </h2>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            {isAr ? activeSectionMeta?.descAr : activeSectionMeta?.descEn}
-          </p>
-        </div>
-      </div>
-      {onSave && (
-        <RippleButton onClick={onSave}>
-          <Save className="w-3.5 h-3.5" />
-          <span>{isAr ? 'حفظ التغييرات' : 'Save Changes'}</span>
-        </RippleButton>
-      )}
-    </div>
-  );
 
   // HUB SCREEN: Unified with LayoutShell canvas + glass-surface cards + About App inside Settings ONLY
   if (activeSection === 'hub') {
@@ -623,15 +936,28 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
       <div className="space-y-6">
         {/* Header & Search */}
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">
-              {isAr ? 'مركز إعدادات التطبيق' : 'Application Settings Center'}
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              {isAr
-                ? 'لوحة التحكم الشاملة لتخصيص هوية الشركة، الأمان، الإشعارات، الطباعة، النسخ الاحتياطي، والمزامنة.'
-                : 'Configure company branding, preferences, security, notifications, print, backup, and sync.'}
-            </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                setActiveNav('dashboard');
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+            >
+              <BackArrow className="w-4 h-4" />
+              <span>{isAr ? 'رجوع' : 'Back'}</span>
+            </button>
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                {isAr ? 'مركز إعدادات التطبيق' : 'Application Settings Center'}
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                {isAr
+                  ? 'لوحة التحكم الشاملة لتخصيص هوية الشركة، الأمان، الإشعارات، الطباعة، النسخ الاحتياطي، والمزامنة.'
+                  : 'Configure company branding, preferences, security, notifications, print, backup, and sync.'}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -642,7 +968,6 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
               <Sparkles className="w-3.5 h-3.5 text-[#26478D] dark:text-blue-400" />
               <span>{isAr ? 'معالج الإعداد الأولي' : 'Setup Wizard'}</span>
             </button>
-            <PrintViewButton />
           </div>
         </div>
 
@@ -666,52 +991,95 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
           )}
         </div>
 
-        {/* 8 Vertical Glass Cards */}
-        <div className="space-y-3">
-          {filteredSections.map((sec) => {
-            const Icon = sec.icon;
-            return (
-              <button
-                key={sec.id}
-                type="button"
-                onClick={() => {
-                  triggerHaptic('light');
-                  setActiveSection(sec.id);
-                }}
-                className="w-full p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface glass-card-interactive hover:border-[#26478D]/50 flex items-center justify-between gap-4 text-start cursor-pointer group"
-              >
-                <div className="flex items-center gap-4 min-w-0">
-                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${sec.iconColorClass}`}>
-                    <Icon className="w-5 h-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
-                      {isAr ? sec.titleAr : sec.titleEn}
-                    </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                      {isAr ? sec.descAr : sec.descEn}
-                    </div>
-                  </div>
-                </div>
-                <ChevronNav className="w-4 h-4 text-slate-400 group-hover:text-[#26478D] dark:group-hover:text-blue-400 transition-colors shrink-0" />
-              </button>
-            );
-          })}
+        {/* 12 Core Settings Sections + System & Technical Sections */}
+        <div className="space-y-6">
+          {filteredSections.some((s) => s.group === 'core') && (
+            <div className="space-y-2.5">
+              <div className="text-xs font-bold text-slate-500 dark:text-slate-400 px-1">
+                {isAr ? 'الأقسام الأساسية لإعدادات العقارات والعمليات (12 قسماً)' : 'Core Settings Sections (12)'}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {filteredSections
+                  .filter((s) => s.group === 'core')
+                  .map((sec) => {
+                    const Icon = sec.icon;
+                    return (
+                      <button
+                        key={sec.id}
+                        type="button"
+                      onClick={() => navigateToSection(sec.id)}
+                        className="w-full p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface glass-card-interactive hover:border-[#26478D]/50 flex items-center justify-between gap-3 text-start cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${sec.iconColorClass}`}>
+                            <Icon className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                              {isAr ? sec.titleAr : sec.titleEn}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                              {isAr ? sec.descAr : sec.descEn}
+                            </div>
+                          </div>
+                        </div>
+                        <ChevronNav className="w-4 h-4 text-slate-400 group-hover:text-[#26478D] dark:group-hover:text-blue-400 transition-colors shrink-0" />
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
+          {filteredSections.some((s) => s.group === 'system') && (
+            <div className="space-y-2.5">
+              <div className="text-xs font-bold text-slate-500 dark:text-slate-400 px-1">
+                {isAr ? 'إعدادات النظام، الأمان، الطباعة، النسخ والمزامنة' : 'System, Security, Print, Backup & Sync'}
+              </div>
+              <div className="space-y-2.5">
+                {filteredSections
+                  .filter((s) => s.group === 'system')
+                  .map((sec) => {
+                    const Icon = sec.icon;
+                    return (
+                      <button
+                        key={sec.id}
+                        type="button"
+                      onClick={() => navigateToSection(sec.id)}
+                        className="w-full p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface glass-card-interactive hover:border-[#26478D]/50 flex items-center justify-between gap-4 text-start cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${sec.iconColorClass}`}>
+                            <Icon className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                              {isAr ? sec.titleAr : sec.titleEn}
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                              {isAr ? sec.descAr : sec.descEn}
+                            </div>
+                          </div>
+                        </div>
+                        <ChevronNav className="w-4 h-4 text-slate-400 group-hover:text-[#26478D] dark:group-hover:text-blue-400 transition-colors shrink-0" />
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
 
           {/* About App Card — STRICTLY inside Settings Center only */}
-          {(!searchQuery.trim() || 'حول التطبيق أيقونة الإصدار المطور عبدالله'.includes(searchQuery.trim().toLowerCase())) && (
+          {(!searchQuery.trim() || 'حول التطبيق الشعار الإصدار المطور عبدالله'.includes(searchQuery.trim().toLowerCase())) && (
             <button
               type="button"
-              onClick={() => {
-                triggerHaptic('light');
-                setActiveSection('about');
-              }}
+              onClick={() => navigateToSection('about')}
               className="w-full p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface glass-card-interactive hover:border-[#26478D]/50 flex items-center justify-between gap-4 text-start cursor-pointer group"
             >
               <div className="flex items-center gap-4 min-w-0">
-                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#26478D] to-[#0A0E1A] border border-white/15 flex items-center justify-center shrink-0 overflow-hidden p-1.5">
+                <div className="w-11 h-11 rounded-xl bg-white/95 border border-slate-200 dark:border-white/15 flex items-center justify-center shrink-0 overflow-hidden p-1.5">
                   <img
-                    src="/assets/aistudio/Aqar_plus_8de53ba4.svg"
+                    src="./assets/aistudio/Aqar_plus_8de53ba4.svg"
                     alt="AqarPlus"
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-contain"
@@ -719,12 +1087,12 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                 </div>
                 <div className="min-w-0">
                   <div className="text-sm font-bold text-slate-900 dark:text-white">
-                    {isAr ? 'حول التطبيق وأيقونة النظام' : 'About AqarPlus & App Icon'}
+                    {isAr ? 'حول التطبيق' : 'About AqarPlus'}
                   </div>
                   <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                     {isAr
-                      ? 'الإصدار 1.0.0 · استوديو الأيقونة (1024×1024) · صانع التطبيق والوثائق القانونية'
-                      : 'Version 1.0.0 · 1024×1024 Icon Kit · Creator & Legal'}
+                      ? 'الإصدار 1.0.0 · شعار التطبيق الأصلي · بيانات المطور والدعم والوثائق القانونية'
+                      : 'Version 1.0.0 · App Logo · Creator, Support & Legal'}
                   </div>
                 </div>
               </div>
@@ -773,7 +1141,7 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
               <div className="flex flex-col items-center gap-3 p-5 rounded-2xl border border-dashed border-slate-300 dark:border-white/15 bg-slate-50/80 dark:bg-white/[0.03]">
                 <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-[#26478D] to-[#0A0E1A] flex items-center justify-center overflow-hidden border border-white/15 shadow-lg">
                   <img
-                    src={draft.logoDataUrl || '/assets/aistudio/Aqar_plus_8de53ba4.svg'}
+                    src={draft.logoDataUrl || './assets/aistudio/Aqar_plus_8de53ba4.svg'}
                     alt="Company Logo"
                     referrerPolicy="no-referrer"
                     className={`w-full h-full ${draft.logoDataUrl ? 'object-cover' : 'object-contain p-3'}`}
@@ -1090,7 +1458,7 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                     {draft.receiptBranding?.showLogo && (
                       <div className="w-8 h-8 rounded-lg bg-[#0A0E1A] flex items-center justify-center overflow-hidden p-1">
                         <img
-                          src={draft.logoDataUrl || '/assets/aistudio/Aqar_plus_8de53ba4.svg'}
+                          src={draft.logoDataUrl || './assets/aistudio/Aqar_plus_8de53ba4.svg'}
                           alt="Logo"
                           referrerPolicy="no-referrer"
                           className="w-full h-full object-contain"
@@ -1227,9 +1595,17 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
                 if ((prefersDark && theme !== 'dark') || (!prefersDark && theme !== 'light')) toggleTheme();
               }
+              const nextCalCfg = {
+                ...(draft.calendarConfig || state.settings.calendarConfig || DEFAULT_CALENDAR_CONFIG),
+                calendarType: gp.calendar,
+                dateFormat: gp.dateFormat,
+                numerals: gp.numeralFormat,
+              };
+              setDraft((prev) => ({ ...prev, calendarConfig: nextCalCfg }));
               await savePartialSettings(
                 {
                   generalPrefs: { ...gp, currency: 'SAR' },
+                  calendarConfig: nextCalCfg,
                   baseCurrency: 'SAR',
                   dateCalendar: gp.calendar === 'gregorian' ? 'ميلادي فقط' : 'هجري وميلادي',
                 },
@@ -1357,15 +1733,16 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
       {activeSection === 'security' && (
         <>
           <SectionSubHeader
-            onSave={() => {
+            onSave={async () => {
               if (/^\d{4,6}$/.test(pinDraft.trim())) {
                 localStorage.setItem(PIN_STORAGE_KEY, pinDraft.trim());
+                await changeCredentials({ newPin: pinDraft.trim() });
               }
               const nextSec = {
                 ...(draft.securityCenter || state.settings.securityCenter!),
                 patternCode: patternSequence.join('-') || '1-4-7-8-9',
               };
-              savePartialSettings({ securityCenter: nextSec }, isAr ? 'تم حفظ إعدادات الأمان والقفل بنجاح' : 'Security saved');
+              savePartialSettings({ securityCenter: nextSec }, isAr ? 'تم حفظ إعدادات الأمان والقفل وتحديث PIN بنجاح' : 'Security saved');
             }}
           />
 
@@ -1717,8 +2094,123 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                   />
                 </div>
               </div>
+
+              <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
+                <h3 className="text-sm font-bold flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
+                  <span>البريد الإلكتروني وقنوات الإرسال الافتراضية (SMS / WhatsApp)</span>
+                </h3>
+                <GlassToggle
+                  checked={Boolean(draft.notificationsCenter?.emailEnabled)}
+                  onChange={(next) =>
+                    setDraft((prev) => ({
+                      ...prev,
+                      notificationsCenter: {
+                        ...(prev.notificationsCenter || state.settings.notificationsCenter!),
+                        emailEnabled: next,
+                      },
+                    }))
+                  }
+                  label="تفعيل تقارير وتنبيهات البريد الإلكتروني"
+                />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <label className="text-[11px] text-slate-500 block mb-1">بريد استلام التقارير</label>
+                    <input
+                      dir="ltr"
+                      value={draft.notificationsCenter?.emailAddress || draft.email || ''}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          notificationsCenter: {
+                            ...(prev.notificationsCenter || state.settings.notificationsCenter!),
+                            emailAddress: e.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="reports@aljunaidl-aqar.sa"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 block mb-1">مرسل البريد الافتراضي</label>
+                    <input
+                      dir="ltr"
+                      value={draft.notificationsCenter?.defaultEmailSender || draft.email || ''}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          notificationsCenter: {
+                            ...(prev.notificationsCenter || state.settings.notificationsCenter!),
+                            defaultEmailSender: e.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="noreply@aljunaidl-aqar.sa"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 block mb-1 flex items-center gap-1">
+                      <Smartphone className="w-3 h-3" /> رقم واتساب الإرسال الافتراضي
+                    </label>
+                    <input
+                      dir="ltr"
+                      value={draft.notificationsCenter?.defaultWhatsappNumber || draft.whatsapp || ''}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          notificationsCenter: {
+                            ...(prev.notificationsCenter || state.settings.notificationsCenter!),
+                            defaultWhatsappNumber: e.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="966505123400"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-500 block mb-1">اسم المرسل / رقم SMS الافتراضي</label>
+                    <input
+                      dir="ltr"
+                      value={draft.notificationsCenter?.defaultSmsNumber || 'AQARPLUS'}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          notificationsCenter: {
+                            ...(prev.notificationsCenter || state.settings.notificationsCenter!),
+                            defaultSmsNumber: e.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="AQARPLUS"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
+        </>
+      )}
+
+      {/* CATALOG & CORE SECTIONS (Sections 3–11) */}
+      {(CATALOG_SECTION_IDS as string[]).includes(activeSection) && (
+        <SettingsCatalogSections
+          section={activeSection as CatalogSettingsSectionId}
+          draft={draft}
+          setDraft={setDraft}
+          savePartialSettings={savePartialSettings}
+          SectionSubHeader={SectionSubHeader}
+        />
+      )}
+
+      {/* SECTION 12: COMMUNICATION TEMPLATES */}
+      {activeSection === 'templates' && (
+        <>
+          <SectionSubHeader />
+          <CommunicationTemplatesView />
         </>
       )}
 
@@ -1931,7 +2423,7 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                 value={draft.backupPolicy?.storageTarget || 'nas'}
                 options={[
                   { value: 'device', label: 'ذاكرة الجهاز المحلية' },
-                  { value: 'custom_folder', label: 'مجلد مخصص' },
+                  { value: 'custom_folder', label: 'مجلد مخصص على القرص' },
                   { value: 'nas', label: 'خادم الشركة (NAS)' },
                   { value: 'cloud', label: 'تخزين سحابي خاص (اختياري)' },
                 ]}
@@ -1943,20 +2435,246 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                 }
               />
 
-              <div className="text-xs">
-                <label className="text-[11px] text-slate-500 block mb-1">المسار / المجلد</label>
-                <input
-                  dir="ltr"
-                  value={draft.backupPolicy?.customPath || ''}
-                  onChange={(e) =>
-                    setDraft((prev) => ({
-                      ...prev,
-                      backupPolicy: { ...(prev.backupPolicy || state.settings.backupPolicy!), customPath: e.target.value },
-                    }))
-                  }
-                  placeholder="\\NAS-AQAR\Backups\AqarPlus"
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
-                />
+              {/* Dedicated Custom Disk Paths: Backups, Smart Archive, Documents */}
+              <div className="space-y-3 pt-2 border-t border-slate-200/70 dark:border-white/10">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-bold flex items-center gap-1.5">
+                      <HardDrive className="w-3.5 h-3.5 text-[#26478D] dark:text-[#60a5fa]" />
+                      <span>مجلدات الحفظ المحلية على الكمبيوتر</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      {window.aqarDesktop?.isElectron
+                        ? 'وضع تطبيق سطح المكتب نشط — يمكنك استعراض أي مجلد على القرص مباشرة'
+                        : 'في المتصفح أدخل المسار الكامل (مثل D:\\AqarPlus\\Backups) أو استخدم زر التصفح داخل تطبيق سطح المكتب (.exe)'}
+                    </p>
+                  </div>
+                  {window.aqarDesktop?.isElectron && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const defaults = await window.aqarDesktop?.getDefaultPaths();
+                        if (!defaults) return;
+                        setDraft((prev) => ({
+                          ...prev,
+                          backupPolicy: {
+                            ...(prev.backupPolicy || state.settings.backupPolicy!),
+                            storageTarget: 'custom_folder',
+                            customPath: defaults.backupsDir,
+                            archivePath: defaults.archiveDir,
+                            documentsPath: defaults.documentsDir,
+                          },
+                        }));
+                        pushToast('info', 'تمت تعبئة المسارات الافتراضية داخل مجلد المستندات');
+                      }}
+                      className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-white/10 hover:bg-slate-200 dark:hover:bg-white/20 cursor-pointer shrink-0"
+                    >
+                      تعبئة افتراضية
+                    </button>
+                  )}
+                </div>
+
+                {(
+                  [
+                    {
+                      key: 'customPath' as const,
+                      label: '1. مجلد النسخ الاحتياطي',
+                      placeholder: 'D:\\AqarPlus\\Backups',
+                      activeDir: storageStatus?.backupsDir,
+                      filesCount: storageStatus?.backupsFilesCount ?? 0,
+                    },
+                    {
+                      key: 'archivePath' as const,
+                      label: '2. مجلد الأرشيف الذكي',
+                      placeholder: 'D:\\AqarPlus\\Archive',
+                      activeDir: storageStatus?.archiveDir,
+                      filesCount: storageStatus?.archiveFilesCount ?? 0,
+                    },
+                    {
+                      key: 'documentsPath' as const,
+                      label: '3. مجلد المستندات والمرفقات',
+                      placeholder: 'D:\\AqarPlus\\Documents',
+                      activeDir: storageStatus?.documentsDir,
+                      filesCount: storageStatus?.documentsFilesCount ?? 0,
+                    },
+                  ] as const
+                ).map((item) => {
+                  const val = draft.backupPolicy?.[item.key] || '';
+                  return (
+                    <div
+                      key={item.key}
+                      className="p-3 rounded-xl border border-slate-200/80 dark:border-white/10 bg-slate-50/60 dark:bg-white/[0.02] space-y-1.5 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                          {item.label}
+                        </label>
+                        {storageStatus && (
+                          <span className="text-[10px] font-mono-num text-emerald-600 dark:text-emerald-400">
+                            {item.filesCount} ملف محفوظ
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          dir="ltr"
+                          value={val}
+                          onChange={(e) =>
+                            setDraft((prev) => ({
+                              ...prev,
+                              backupPolicy: {
+                                ...(prev.backupPolicy || state.settings.backupPolicy!),
+                                storageTarget: 'custom_folder',
+                                [item.key]: e.target.value,
+                              },
+                            }))
+                          }
+                          placeholder={item.placeholder}
+                          className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/50 font-mono-num text-[11px]"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (window.aqarDesktop?.selectFolder) {
+                              const selected = await window.aqarDesktop.selectFolder(
+                                val || item.activeDir || undefined,
+                                item.label
+                              );
+                              if (selected) {
+                                setDraft((prev) => ({
+                                  ...prev,
+                                  backupPolicy: {
+                                    ...(prev.backupPolicy || state.settings.backupPolicy!),
+                                    storageTarget: 'custom_folder',
+                                    [item.key]: selected,
+                                  },
+                                }));
+                                pushToast('success', `تم تحديد المسار: ${selected}`);
+                              }
+                              return;
+                            }
+                            const wPicker = window as unknown as {
+                              showDirectoryPicker?: (opts?: { mode?: string }) => Promise<{ name: string }>;
+                            };
+                            if (typeof wPicker.showDirectoryPicker === 'function') {
+                              try {
+                                const handle = await wPicker.showDirectoryPicker({ mode: 'readwrite' });
+                                if (handle?.name) {
+                                  pushToast(
+                                    'info',
+                                    `تم اختيار المجلد "${handle.name}". في المتصفح قد يلزم لصق المسار الكامل (مثل D:\\AqarPlus\\${handle.name})، أو استخدام تطبيق سطح المكتب (.exe) للقراءة التلقائية.`
+                                  );
+                                  if (!val.trim()) {
+                                    setDraft((prev) => ({
+                                      ...prev,
+                                      backupPolicy: {
+                                        ...(prev.backupPolicy || state.settings.backupPolicy!),
+                                        storageTarget: 'custom_folder',
+                                        [item.key]: handle.name,
+                                      },
+                                    }));
+                                  }
+                                }
+                              } catch {
+                                // User cancelled browser picker
+                              }
+                            } else {
+                              pushToast('info', 'أدخل مسار المجلد الكامل مباشرة في الحقل واضغط "تحقق"');
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-2 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 text-[11px] font-semibold cursor-pointer shrink-0"
+                          title="اختيار مجلد من الجهاز"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5 text-[#26478D] dark:text-[#60a5fa]" />
+                          <span>تصفح</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={validatingFolder === item.key}
+                          onClick={async () => {
+                            const checkPath = (val || item.activeDir || '').trim();
+                            if (!checkPath) {
+                              pushToast('error', 'أدخل مساراً للتحقق منه أولاً');
+                              return;
+                            }
+                            setValidatingFolder(item.key);
+                            try {
+                              const resp = await apiFetch('/api/storage/validate-path', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ path: checkPath }),
+                              });
+                              const data = await resp.json();
+                              if (data.ok) {
+                                pushToast('success', `المجلد جاهز وقابل للكتابة: ${data.resolvedPath}`);
+                              } else {
+                                pushToast('error', data.error || 'تعذر الوصول للمسار المحدد');
+                              }
+                            } catch {
+                              pushToast('error', 'تعذر التحقق من المسار');
+                            } finally {
+                              setValidatingFolder(null);
+                            }
+                          }}
+                          className="px-2.5 py-2 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 text-[11px] font-semibold cursor-pointer shrink-0"
+                        >
+                          {validatingFolder === item.key ? '...' : 'تحقق'}
+                        </button>
+                        {window.aqarDesktop?.openPath && (val || item.activeDir) && (
+                          <button
+                            type="button"
+                            onClick={() => void window.aqarDesktop?.openPath(val || item.activeDir || '')}
+                            className="p-2 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer shrink-0"
+                            title="فتح المجلد في مستكشف الملفات"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {item.activeDir && (
+                        <div className="text-[10px] text-slate-400 font-mono-num truncate" dir="ltr">
+                          المسار الفعلي الآن: {item.activeDir}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                <button
+                  type="button"
+                  disabled={syncingFolders}
+                  onClick={async () => {
+                    setSyncingFolders(true);
+                    try {
+                      await mutate(
+                        'PATCH',
+                        '/api/settings',
+                        { backupPolicy: draft.backupPolicy },
+                        { offlineDescAr: 'حفظ مسارات التخزين المحلية' }
+                      );
+                      const syncRes = (await mutate('POST', '/api/storage/sync-folders', {})) as {
+                        backupsSynced?: number;
+                        archiveFilesSynced?: number;
+                        documentsSynced?: number;
+                        status?: StorageStatusData;
+                      } | null;
+                      if (syncRes?.status) setStorageStatus(syncRes.status);
+                      else await loadStorageStatus();
+                      if (syncRes) {
+                        pushToast(
+                          'success',
+                          `تم حفظ المسارات ومزامنة القرص (${syncRes.backupsSynced ?? 0} نسخة · ${syncRes.archiveFilesSynced ?? 0} ملف أرشيف · ${syncRes.documentsSynced ?? 0} مستند)`
+                        );
+                      }
+                    } finally {
+                      setSyncingFolders(false);
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-[#26478D] text-white text-xs font-bold hover:bg-[#1e3a75] transition-colors cursor-pointer disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingFolders ? 'animate-spin' : ''}`} />
+                  <span>{syncingFolders ? 'جاري حفظ المسارات ومزامنة القرص...' : 'حفظ المسارات ومزامنة الملفات إلى القرص الآن'}</span>
+                </button>
               </div>
 
               <div className="pt-2 border-t border-slate-200/70 dark:border-white/10 space-y-3">
@@ -1993,8 +2711,13 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
                 </div>
                 <RippleButton
                   onClick={async () => {
+                    if (draft.backupPolicy?.encryptBackups && !backupEncryptPassword.trim()) {
+                      pushToast('error', isAr ? 'أدخل كلمة مرور لتشفير النسخة الاحتياطية بـ AES-256' : 'Enter password to encrypt backup');
+                      return;
+                    }
                     const res = await mutate('POST', '/api/backups', {
-                      label: `نسخة احتياطية ${draft.backupPolicy?.encryptBackups ? '(مشفرة) ' : ''}· ${new Date().toLocaleDateString('ar-SA')}`,
+                      label: `نسخة احتياطية ${draft.backupPolicy?.encryptBackups ? '(مشفرة AES-256) ' : ''}· ${new Date().toLocaleDateString('ar-SA')}`,
+                      encryptPassword: draft.backupPolicy?.encryptBackups ? backupEncryptPassword : undefined,
                     });
                     if (res) pushToast('success', isAr ? 'تم إنشاء نسخة احتياطية جديدة بنجاح' : 'Backup created');
                   }}
@@ -2275,6 +2998,357 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
         </>
       )}
 
+      {/* SECTION: INTEGRATIONS & EXTERNAL APIS */}
+      {activeSection === 'integrations' && (
+        <>
+          <SectionSubHeader
+            onSave={() =>
+              savePartialSettings(
+                { integrationsConfig: draft.integrationsConfig },
+                isAr ? 'تم حفظ إعدادات التكاملات والربط الخارجي' : 'Integrations configuration saved'
+              )
+            }
+          />
+
+          <div className="space-y-6">
+            {/* Active Integrations */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-emerald-500" />
+                  <span>التكاملات النشطة الجاهزة للربط (Active Integrations)</span>
+                </h3>
+                <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  4 قنوات تشغيلية مفعلة
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* 1. WhatsApp Business API */}
+                <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                        <MessageSquareText className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold">WhatsApp Business API</div>
+                        <div className="text-[11px] text-slate-500">إرسال إشعارات الاستحقاق والإيصالات عبر روابط مباشرة</div>
+                      </div>
+                    </div>
+                  </div>
+                  <GlassToggle
+                    checked={Boolean(draft.integrationsConfig?.whatsappBusinessEnabled)}
+                    onChange={(next) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        integrationsConfig: {
+                          ...(prev.integrationsConfig || {
+                            whatsappBusinessEnabled: true,
+                            smtpEnabled: true,
+                            smsGatewayEnabled: false,
+                            mapProvider: 'osm',
+                          }),
+                          whatsappBusinessEnabled: next,
+                        },
+                      }))
+                    }
+                    label="تفعيل الربط المباشر عبر واتساب"
+                  />
+                  <div className="text-xs">
+                    <label className="text-[11px] text-slate-500 block mb-1">معرّف رقم الأعمال (Phone Number ID)</label>
+                    <input
+                      dir="ltr"
+                      value={draft.integrationsConfig?.whatsappPhoneId || ''}
+                      onChange={(e) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          integrationsConfig: {
+                            ...(prev.integrationsConfig || {
+                              whatsappBusinessEnabled: true,
+                              smtpEnabled: true,
+                              smsGatewayEnabled: false,
+                              mapProvider: 'osm',
+                            }),
+                            whatsappPhoneId: e.target.value,
+                          },
+                        }))
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                    />
+                  </div>
+                </div>
+
+                {/* 2. Email (SMTP) */}
+                <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-blue-500/12 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                      <Mail className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold">البريد الإلكتروني (SMTP Server)</div>
+                      <div className="text-[11px] text-slate-500">إرسال العقود والتقارير المجدولة وفواتير الضريبة</div>
+                    </div>
+                  </div>
+                  <GlassToggle
+                    checked={Boolean(draft.integrationsConfig?.smtpEnabled)}
+                    onChange={(next) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        integrationsConfig: {
+                          ...(prev.integrationsConfig || {
+                            whatsappBusinessEnabled: true,
+                            smtpEnabled: true,
+                            smsGatewayEnabled: false,
+                            mapProvider: 'osm',
+                          }),
+                          smtpEnabled: next,
+                        },
+                      }))
+                    }
+                    label="تفعيل خادم البريد الصادر SMTP"
+                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    <div className="sm:col-span-2">
+                      <label className="text-[11px] text-slate-500 block mb-1">خادم SMTP</label>
+                      <input
+                        dir="ltr"
+                        value={draft.integrationsConfig?.smtpHost || ''}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            integrationsConfig: {
+                              ...(prev.integrationsConfig || {
+                                whatsappBusinessEnabled: true,
+                                smtpEnabled: true,
+                                smsGatewayEnabled: false,
+                                mapProvider: 'osm',
+                              }),
+                              smtpHost: e.target.value,
+                            },
+                          }))
+                        }
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-500 block mb-1">المنفذ</label>
+                      <input
+                        type="number"
+                        dir="ltr"
+                        value={draft.integrationsConfig?.smtpPort || 587}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            integrationsConfig: {
+                              ...(prev.integrationsConfig || {
+                                whatsappBusinessEnabled: true,
+                                smtpEnabled: true,
+                                smsGatewayEnabled: false,
+                                mapProvider: 'osm',
+                              }),
+                              smtpPort: Number(e.target.value || 587),
+                            },
+                          }))
+                        }
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. SMS Gateway */}
+                <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500/12 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold">بوابة الرسائل النصية (SMS Gateway)</div>
+                      <div className="text-[11px] text-slate-500">اختياري للتنبيهات الحرجة ومطابقة الإيصالات الفورية</div>
+                    </div>
+                  </div>
+                  <GlassToggle
+                    checked={Boolean(draft.integrationsConfig?.smsGatewayEnabled)}
+                    onChange={(next) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        integrationsConfig: {
+                          ...(prev.integrationsConfig || {
+                            whatsappBusinessEnabled: true,
+                            smtpEnabled: true,
+                            smsGatewayEnabled: false,
+                            mapProvider: 'osm',
+                          }),
+                          smsGatewayEnabled: next,
+                        },
+                      }))
+                    }
+                    label="تفعيل بوابة SMS (اختياري)"
+                  />
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <label className="text-[11px] text-slate-500 block mb-1">المزود</label>
+                      <input
+                        value={draft.integrationsConfig?.smsProviderName || ''}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            integrationsConfig: {
+                              ...(prev.integrationsConfig || {
+                                whatsappBusinessEnabled: true,
+                                smtpEnabled: true,
+                                smsGatewayEnabled: false,
+                                mapProvider: 'osm',
+                              }),
+                              smsProviderName: e.target.value,
+                            },
+                          }))
+                        }
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-500 block mb-1">اسم المرسل (Sender ID)</label>
+                      <input
+                        dir="ltr"
+                        value={draft.integrationsConfig?.smsSenderId || ''}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            integrationsConfig: {
+                              ...(prev.integrationsConfig || {
+                                whatsappBusinessEnabled: true,
+                                smtpEnabled: true,
+                                smsGatewayEnabled: false,
+                                mapProvider: 'osm',
+                              }),
+                              smsSenderId: e.target.value,
+                            },
+                          }))
+                        }
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Map APIs */}
+                <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-violet-500/12 text-violet-600 dark:text-violet-400 flex items-center justify-center">
+                      <Navigation className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-bold">واجهات الخرائط الجغرافية (Map APIs)</div>
+                      <div className="text-[11px] text-slate-500">تحديد مواقع العقارات على الخريطة ومعاينة المسارات</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          integrationsConfig: {
+                            ...(prev.integrationsConfig || {
+                              whatsappBusinessEnabled: true,
+                              smtpEnabled: true,
+                              smsGatewayEnabled: false,
+                              mapProvider: 'osm',
+                            }),
+                            mapProvider: 'osm',
+                          },
+                        }))
+                      }
+                      className={`p-3 rounded-xl border text-start cursor-pointer transition-colors ${
+                        (draft.integrationsConfig?.mapProvider || 'osm') === 'osm'
+                          ? 'border-[#26478D] bg-[#26478D]/10 text-[#26478D] dark:text-blue-300 font-bold'
+                          : 'border-slate-200 dark:border-white/10'
+                      }`}
+                    >
+                      <div>OpenStreetMap</div>
+                      <div className="text-[10px] opacity-75 font-normal mt-0.5">مفتوح ومجاني بالكامل</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          integrationsConfig: {
+                            ...(prev.integrationsConfig || {
+                              whatsappBusinessEnabled: true,
+                              smtpEnabled: true,
+                              smsGatewayEnabled: false,
+                              mapProvider: 'osm',
+                            }),
+                            mapProvider: 'google_maps',
+                            googleMapsLinked: true,
+                          },
+                        }))
+                      }
+                      className={`p-3 rounded-xl border text-start cursor-pointer transition-colors ${
+                        draft.integrationsConfig?.mapProvider === 'google_maps'
+                          ? 'border-[#26478D] bg-[#26478D]/10 text-[#26478D] dark:text-blue-300 font-bold'
+                          : 'border-slate-200 dark:border-white/10'
+                      }`}
+                    >
+                      <div>Google Maps</div>
+                      <div className="text-[10px] opacity-75 font-normal mt-0.5">دقة العناوين والمواقع</div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Future Integrations Roadmap */}
+            <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-4">
+              <div>
+                <h3 className="text-sm font-bold">خارطة التكاملات المستقبلية (المرحلة القادمة)</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  تكاملات تتطلب موافقات رسمية أو شراكات مع الجهات المختصة وتعمل حالياً بآلية التجهيز المسبق
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-xs">
+                {[
+                  {
+                    title: 'منصة إيجار',
+                    req: 'موافقة رسمية',
+                    desc: 'مزامنة عقود الإيجار الموحدة وسندات التنفيذ آلياً.',
+                  },
+                  {
+                    title: 'نفاذ / أبشر',
+                    req: 'شراكة رسمية',
+                    desc: 'التوثيق الفوري لهويات المستأجرين والتوقيع الرقمي.',
+                  },
+                  {
+                    title: 'البنوك (Open Banking)',
+                    req: 'API بنكي معتمد',
+                    desc: 'مطابقة الحوالات البنكية الواردة بالآيبان تلقائياً.',
+                  },
+                  {
+                    title: 'الأنظمة المحاسبية',
+                    req: 'ربط ERP خارجي',
+                    desc: 'تصدير ومزامنة القيود ومراكز التكلفة وضريبة القيمة المضافة.',
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.title}
+                    className="p-3.5 rounded-xl border border-slate-200/80 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.02] space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-slate-900 dark:text-white">{item.title}</span>
+                      <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400">{item.req}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">{item.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Add Bank Account Modal */}
       {newBankModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4">
@@ -2343,35 +3417,117 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
             <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2.5">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
               <div>
-                <strong>تحذير:</strong> سيتم استبدال البيانات الحالية بمحتويات النسخة المختارة: <strong>{backupPreview.label}</strong>
+                <strong>معاينة النسخة:</strong> <strong>{backupPreview.label}</strong>
               </div>
             </div>
-            {backupPreview.exists ? (
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
-                  <span>العقارات:</span>
-                  <strong className="font-mono-num">{backupPreview.propertiesCount}</strong>
+            {backupPreview.exists && (
+              <div className="space-y-2 text-xs">
+                <div className="font-semibold text-slate-600 dark:text-slate-300">اختر وضع الاستعادة:</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRestoreMode('replace')}
+                    className={`p-3 rounded-xl border text-start cursor-pointer transition-colors ${
+                      restoreMode === 'replace'
+                        ? 'border-red-500 bg-red-500/10 text-red-700 dark:text-red-300 font-bold'
+                        : 'border-slate-200 dark:border-white/10'
+                    }`}
+                  >
+                    <div>استبدال كامل</div>
+                    <div className="text-[10px] opacity-75 font-normal mt-0.5">يستبدل البيانات الحالية بالكامل</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRestoreMode('merge')}
+                    className={`p-3 rounded-xl border text-start cursor-pointer transition-colors ${
+                      restoreMode === 'merge'
+                        ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold'
+                        : 'border-slate-200 dark:border-white/10'
+                    }`}
+                  >
+                    <div>دمج ذكي (Merge)</div>
+                    <div className="text-[10px] opacity-75 font-normal mt-0.5">يضيف السجلات الجديدة فقط</div>
+                  </button>
                 </div>
-                <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
-                  <span>الوحدات:</span>
-                  <strong className="font-mono-num">{backupPreview.unitsCount}</strong>
+              </div>
+            )}
+            {backupPreview.requiresPassword ? (
+              <div className="space-y-3 text-xs p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10">
+                <div className="font-bold text-amber-700 dark:text-amber-300">
+                  هذه النسخة مشفرة بـ AES-256-GCM — أدخل كلمة المرور لمعاينة الفروقات والاستعادة:
                 </div>
-                <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
-                  <span>المستأجرون:</span>
-                  <strong className="font-mono-num">{backupPreview.tenantsCount}</strong>
+                {backupPreview.decryptionError && (
+                  <div className="text-red-500 font-semibold">{backupPreview.decryptionError}</div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={backupRestorePassword}
+                    onChange={(e) => setBackupRestorePassword(e.target.value)}
+                    placeholder="كلمة مرور فك التشفير..."
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                  />
+                  <RippleButton
+                    type="button"
+                    onClick={() => void handlePreviewBackup(backupPreview.id, backupPreview.label, backupRestorePassword)}
+                  >
+                    فك التشفير والمعاينة
+                  </RippleButton>
                 </div>
-                <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
-                  <span>العقود:</span>
-                  <strong className="font-mono-num">{backupPreview.contractsCount}</strong>
+              </div>
+            ) : backupPreview.exists ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
+                    <span>العقارات:</span>
+                    <strong className="font-mono-num">{backupPreview.propertiesCount}</strong>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
+                    <span>الوحدات:</span>
+                    <strong className="font-mono-num">{backupPreview.unitsCount}</strong>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
+                    <span>المستأجرون:</span>
+                    <strong className="font-mono-num">{backupPreview.tenantsCount}</strong>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
+                    <span>العقود:</span>
+                    <strong className="font-mono-num">{backupPreview.contractsCount}</strong>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
+                    <span>السندات:</span>
+                    <strong className="font-mono-num">{backupPreview.paymentsCount}</strong>
+                  </div>
+                  <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
+                    <span>القوالب:</span>
+                    <strong className="font-mono-num">{backupPreview.templatesCount}</strong>
+                  </div>
                 </div>
-                <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
-                  <span>السندات:</span>
-                  <strong className="font-mono-num">{backupPreview.paymentsCount}</strong>
-                </div>
-                <div className="p-2.5 rounded-xl border border-slate-200 dark:border-white/10 flex justify-between">
-                  <span>القوالب:</span>
-                  <strong className="font-mono-num">{backupPreview.templatesCount}</strong>
-                </div>
+                {backupPreview.diff && (
+                  <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-200 dark:border-white/10 divide-y divide-slate-100 dark:divide-white/5 text-[11px]">
+                    {(
+                      [
+                        ['properties', 'العقارات'],
+                        ['units', 'الوحدات'],
+                        ['tenants', 'المستأجرون'],
+                        ['contracts', 'العقود'],
+                        ['payments', 'السندات'],
+                        ['expenses', 'المصروفات'],
+                        ['tickets', 'الصيانة'],
+                      ] as const
+                    ).map(([k, label]) => {
+                      const d = backupPreview.diff![k];
+                      return (
+                        <div key={k} className="px-3 py-1.5 flex items-center justify-between gap-2">
+                          <span className="font-semibold">{label}</span>
+                          <span className="font-mono-num text-slate-500 dark:text-slate-300">
+                            +{d.added} جديد · ~{d.updated} تحديث · ={d.unchanged} مطابق
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="text-xs text-red-500">ملف النسخة غير موجود على الخادم — أنشئ نسخة فورية جديدة أولاً.</div>
@@ -2384,9 +3540,12 @@ export function SettingsCenterView({ initialSection = 'hub' }: { initialSection?
               >
                 إلغاء
               </button>
-              {backupPreview.exists && (
-                <RippleButton variant="danger" onClick={handleConfirmRestoreBackup}>
-                  تأكيد الاستعادة الآن
+              {backupPreview.exists && !backupPreview.requiresPassword && (
+                <RippleButton
+                  variant={restoreMode === 'merge' ? 'primary' : 'danger'}
+                  onClick={handleConfirmRestoreBackup}
+                >
+                  {restoreMode === 'merge' ? 'تأكيد الدمج الذكي الآن' : 'تأكيد الاستبدال الآن'}
                 </RippleButton>
               )}
             </div>

@@ -1,22 +1,19 @@
 import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  Download,
   Shield,
   Database,
   RotateCcw,
-  Plus,
   X,
   CheckCircle2,
-  Printer,
   FileSpreadsheet,
   Gavel,
 } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
 import { ExecutiveDecision, PermissionKey, RoleKey } from '../types/aqar';
-import { exportToCsv, formatCurrency, formatDateTime, formatSar } from '../utils/formatters';
-import { PrintViewButton } from './PrintViewButton';
+import { formatDateTime, formatSar } from '../utils/formatters';
 import { DocumentArchiveOcrPanel } from './DocumentArchiveOcrPanel';
+import { ReportsCenterView } from './ReportsCenterView';
 
 const ACCEPTANCE_ITEMS = [
   'يستطيع عدة موظفين تسجيل الدخول في الوقت نفسه.',
@@ -57,7 +54,7 @@ const PERMISSION_LABELS: { key: PermissionKey; labelAr: string }[] = [
 ];
 
 export function AdminHubView({ mode = 'all' }: { mode?: 'reports' | 'team' | 'all' }) {
-  const { state, lang, hasPermission, mutate, pushToast, baseCurrency, convertToBase } = useAqar();
+  const { state, lang, hasPermission, mutate, pushToast } = useAqar();
   const [tab, setTab] = useState<'reports' | 'documents' | 'rbac' | 'backups'>(
     mode === 'team' ? 'rbac' : 'reports'
   );
@@ -80,27 +77,6 @@ export function AdminHubView({ mode = 'all' }: { mode?: 'reports' | 'team' | 'al
   const [importFileName, setImportFileName] = useState('');
 
   if (!state) return null;
-
-  const handleDownloadCollectionCsv = () => {
-    const headers = ['رقم السند', 'المستأجر', 'الوحدة', 'المبلغ (ر.س)', 'الطريقة', 'الحالة', 'التاريخ'];
-    const rows = state.payments.map((p) => {
-      const t = state.tenants.find((x) => x.id === p.tenantId);
-      const u = state.units.find((x) => x.id === p.unitId);
-      return [p.receiptNumber, t?.nameAr || '', u?.unitNumber || '', p.amount, p.paymentMethod, p.status, p.createdAt];
-    });
-    exportToCsv('aqarplus-collections-2026.csv', headers, rows);
-    pushToast('success', 'تم تصدير تقرير التحصيل بصيغة CSV/Excel');
-  };
-
-  const handleDownloadOccupancyCsv = () => {
-    const headers = ['العقار', 'رقم الوحدة', 'النوع', 'المساحة', 'الإيجار السنوي', 'الحالة'];
-    const rows = state.units.map((u) => {
-      const p = state.properties.find((x) => x.id === u.propertyId);
-      return [p?.nameAr || '', u.unitNumber, u.unitType, u.areaSqm, u.suggestedAnnualRent, u.status];
-    });
-    exportToCsv('aqarplus-units-occupancy.csv', headers, rows);
-    pushToast('success', 'تم تصدير تقرير الوحدات والإشغال بصيغة CSV/Excel');
-  };
 
   const handleCreateDecision = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -264,7 +240,6 @@ export function AdminHubView({ mode = 'all' }: { mode?: 'reports' | 'team' | 'al
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <PrintViewButton />
           {tab === 'rbac' && hasPermission('manage_users') && (
             <button
               onClick={() => setShowAddDecision(true)}
@@ -277,98 +252,8 @@ export function AdminHubView({ mode = 'all' }: { mode?: 'reports' | 'team' | 'al
         </div>
       </div>
 
-      {/* Tab 1: Reports & KPIs */}
-      {tab === 'reports' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold">تقرير التحصيل المالي وسندات القبض</h3>
-                <button
-                  onClick={handleDownloadCollectionCsv}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#26478D] text-white text-xs font-semibold cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>تصدير CSV / Excel</span>
-                </button>
-              </div>
-              <p className="text-xs text-slate-500">
-                يشمل جميع سندات القبض المعتمدة والمعكوسة، وطرق الدفع، وتفاصيل المستأجرين.
-              </p>
-            </div>
-
-            <div className="p-5 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold">تقرير الإشغال وأداء العقارات</h3>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleDownloadOccupancyCsv}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#26478D] text-white text-xs font-semibold cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>تصدير CSV</span>
-                  </button>
-                  <button
-                    onClick={() => window.print()}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-xs cursor-pointer"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                    <span>طباعة</span>
-                  </button>
-                </div>
-              </div>
-              <p className="text-xs text-slate-500">
-                ملخص نسب الإشغال، الوحدات الشاغرة، وتكاليف الصيانة التشغيلية لكل عقار.
-              </p>
-            </div>
-          </div>
-
-          {/* Property Performance Breakdown */}
-          <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-x-auto">
-            <table className="w-full text-start text-xs">
-              <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10">
-                <tr>
-                  <th className="py-3 px-4 text-start font-medium">العقار</th>
-                  <th className="py-3 px-4 text-start font-medium">الوحدات / الإشغال</th>
-                  <th className="py-3 px-4 text-start font-medium">التحصيل الفعلي</th>
-                  <th className="py-3 px-4 text-start font-medium">المتأخرات المفتوحة</th>
-                  <th className="py-3 px-4 text-start font-medium">تكلفة الصيانة والمصروفات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-white/5">
-                {state.properties.map((p) => {
-                  const pUnits = state.units.filter((u) => u.propertyId === p.id);
-                  const leased = pUnits.filter((u) => u.status === 'مؤجرة' || u.status === 'متأخرة في السداد').length;
-                  const collected = state.payments
-                    .filter((pay) => pay.propertyId === p.id && pay.status === 'معتمد')
-                    .reduce((s, pay) => s + convertToBase(pay.amount, pay.currency || 'SAR'), 0);
-                  const openBal = state.installments
-                    .filter((i) => i.propertyId === p.id && i.status !== 'ملغاة')
-                    .reduce((s, i) => s + convertToBase(i.remainingAmount, i.currency || 'SAR'), 0);
-                  const expenses = state.expenses
-                    .filter((e) => e.propertyId === p.id && e.approvalStatus === 'معتمد')
-                    .reduce((s, e) => s + convertToBase(e.amount, e.currency || 'SAR'), 0);
-                  return (
-                    <tr key={p.id}>
-                      <td className="py-3 px-4 font-semibold">{p.nameAr}</td>
-                      <td className="py-3 px-4 font-mono-num">
-                        {leased}/{pUnits.length} ({pUnits.length > 0 ? Math.round((leased / pUnits.length) * 100) : 0}%)
-                      </td>
-                      <td className="py-3 px-4 font-mono-num text-emerald-600 dark:text-emerald-400 font-semibold">
-                        {formatCurrency(collected, baseCurrency, lang)}
-                      </td>
-                      <td className="py-3 px-4 font-mono-num text-amber-600 dark:text-amber-400">
-                        {formatCurrency(openBal, baseCurrency, lang)}
-                      </td>
-                      <td className="py-3 px-4 font-mono-num">{formatCurrency(expenses, baseCurrency, lang)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {/* Tab 1: Comprehensive Advanced Reporting System */}
+      {tab === 'reports' && <ReportsCenterView />}
 
       {/* Tab 2: Central Document Archive + AI OCR */}
       {tab === 'documents' && <DocumentArchiveOcrPanel />}

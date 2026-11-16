@@ -3,7 +3,6 @@ import { Building, Info, Plus, Save, ShieldCheck, Sparkles, X } from 'lucide-rea
 import { useAqar } from '../context/AqarContext';
 import { PropertyOwnershipMode } from '../types/aqar';
 import { formatCurrency } from '../utils/formatters';
-import { PrintViewButton } from './PrintViewButton';
 
 export function CompaniesSettingsView() {
   const { state, lang, hasPermission, mutate, pushToast, baseCurrency, convertToBase, openOnboarding, setActiveNav } = useAqar();
@@ -170,7 +169,6 @@ export function CompaniesSettingsView() {
             <Sparkles className="w-3.5 h-3.5 text-[#26478D] dark:text-blue-400" />
             <span>{lang === 'ar' ? 'معالج الإعداد الأولي' : 'Setup Wizard'}</span>
           </button>
-          <PrintViewButton />
           {hasPermission('manage_properties') && (
             <button
               onClick={() => setShowAddCompany(true)}

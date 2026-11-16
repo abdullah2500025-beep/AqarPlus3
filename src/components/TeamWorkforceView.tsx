@@ -340,6 +340,7 @@ export function TeamWorkforceView() {
 
   // Security Policy draft
   const [policyDraft, setPolicyDraft] = useState<SecurityPolicy | null>(null);
+  const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
 
   // Hooks must always run unconditionally before conditional return
   const users = state?.users || [];
@@ -484,10 +485,28 @@ export function TeamWorkforceView() {
 
   if (!state || !currentUser) return null;
 
-  const canManageTeam = hasPermission('manage_users');
+  const isSysOwner = currentUser.role === 'sys_owner';
+  const isCompanyManager = currentUser.role === 'gm';
+  const canManageTeam = hasPermission('manage_users') && (isSysOwner || isCompanyManager);
   const canManageTasks = hasPermission('manage_tasks');
   const selectedUser = selectedUserId ? users.find((u) => u.id === selectedUserId) || null : null;
   const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) || null : null;
+
+  const canModifyTargetPermissions = (target: StaffUser): boolean => {
+    if (!canManageTeam) return false;
+    if (target.id === currentUser.id) return false; // Nobody can modify their own permissions
+    if (isSysOwner) return true;
+    if (isCompanyManager) return target.role !== 'sys_owner' && target.role !== 'gm';
+    return false;
+  };
+
+  const canModifyRoleColumn = (role: RoleKey): boolean => {
+    if (!canManageTeam) return false;
+    if (currentUser.role === role) return false; // Nobody can edit their own role
+    if (isSysOwner) return true;
+    if (isCompanyManager) return role !== 'sys_owner' && role !== 'gm';
+    return false;
+  };
 
   const effectivePolicy: SecurityPolicy = policyDraft ||
     state.securityPolicy || {
@@ -839,7 +858,7 @@ export function TeamWorkforceView() {
                 <span>{lang === 'ar' ? 'إنشاء مهمة ذكية' : 'Create Smart Task'}</span>
               </button>
             )}
-            {canManageTeam && (
+            {isSysOwner ? (
               <button
                 type="button"
                 onClick={() => {
@@ -851,6 +870,12 @@ export function TeamWorkforceView() {
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>{lang === 'ar' ? 'إضافة موظف جديد' : 'Add Employee'}</span>
               </button>
+            ) : (
+              isCompanyManager && (
+                <span className="text-[11px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400">
+                  إنشاء وحذف المستخدمين حصري لمالك النظام · يمكنك تعديل صلاحيات الموظفين التابعين لك
+                </span>
+              )
             )}
           </div>
         </div>
@@ -1521,14 +1546,22 @@ export function TeamWorkforceView() {
                     <td className="py-2.5 px-4 font-medium whitespace-nowrap">{p.labelAr}</td>
                     {ROLE_CATALOG.map((r) => {
                       const checked = (state.rolePermissions[r.key] || []).includes(p.key);
+                      const editable = canModifyRoleColumn(r.key);
                       return (
                         <td key={r.key} className="py-2.5 px-2.5 text-center">
                           <input
                             type="checkbox"
                             checked={checked}
-                            disabled={!canManageTeam}
+                            disabled={!editable}
+                            title={
+                              !editable
+                                ? currentUser.role === r.key
+                                  ? 'لا يمكن تعديل صلاحيات دورك الحالي'
+                                  : 'صلاحية التعديل غير متاحة لهذا الدور'
+                                : undefined
+                            }
                             onChange={() => handleToggleRolePermission(r.key, p.key)}
-                            className="w-4 h-4 accent-[#26478D] cursor-pointer disabled:opacity-50"
+                            className="w-4 h-4 accent-[#26478D] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           />
                         </td>
                       );
@@ -2126,8 +2159,22 @@ export function TeamWorkforceView() {
 
               {detailTab === 'permissions' && (() => {
                 const modPerms = selectedUser.customModulePermissions || buildDefaultModulePerms(selectedUser.role);
+                const permEditable = canModifyTargetPermissions(selectedUser);
                 return (
                   <div className="space-y-5">
+                    {!permEditable && (
+                      <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200 flex items-center gap-2 text-xs">
+                        <Lock className="w-4 h-4 shrink-0" />
+                        <span>
+                          {selectedUser.id === currentUser.id
+                            ? 'لا يستطيع أي مستخدم تعديل صلاحياته أو دوره الخاص لضمان الحوكمة والرقابة.'
+                            : isCompanyManager
+                            ? 'يستطيع مدير الشركة تعديل صلاحيات الموظفين التابعين له فقط (دون مالك النظام أو المدراء).'
+                            : 'عرض للقراءة فقط — تعديل الصلاحيات متاح لمالك النظام ومدير الشركة للموظفين التابعين.'}
+                        </span>
+                      </div>
+                    )}
+
                     {/* Property-Level Scope */}
                     <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 space-y-3">
                       <div className="flex items-center justify-between">
@@ -2152,9 +2199,9 @@ export function TeamWorkforceView() {
                               <input
                                 type="checkbox"
                                 checked={checked}
-                                disabled={!canManageTeam}
+                                disabled={!permEditable}
                                 onChange={() => handleToggleUserPropertyScope(selectedUser, p.id)}
-                                className="w-4 h-4 accent-[#26478D]"
+                                className="w-4 h-4 accent-[#26478D] disabled:opacity-40"
                               />
                               <span className="truncate">{p.nameAr}</span>
                             </label>
@@ -2190,9 +2237,9 @@ export function TeamWorkforceView() {
                                     <input
                                       type="checkbox"
                                       checked={activeLevels.includes(lv.key)}
-                                      disabled={!canManageTeam}
+                                      disabled={!permEditable}
                                       onChange={() => handleToggleUserModuleLevel(selectedUser, mod.key, lv.key)}
-                                      className="w-4 h-4 accent-[#26478D] cursor-pointer"
+                                      className="w-4 h-4 accent-[#26478D] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                     />
                                   </td>
                                 ))}
@@ -2242,26 +2289,64 @@ export function TeamWorkforceView() {
                         className="w-4 h-4 accent-[#26478D]"
                       />
                     </label>
-                    {canManageTeam && selectedUser.id !== currentUser.id && (
-                      <div className="pt-2 flex items-center justify-between border-t border-slate-200 dark:border-white/10">
+                    {canModifyTargetPermissions(selectedUser) && (
+                      <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 dark:border-white/10">
                         <span>حالة تفعيل الحساب في الشركة</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateUserPatch(
-                              selectedUser.id,
-                              { active: !selectedUser.active },
-                              selectedUser.active ? 'تم إيقاف حساب الموظف' : 'تم إعادة تفعيل حساب الموظف'
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleUpdateUserPatch(
+                                selectedUser.id,
+                                { active: !selectedUser.active },
+                                selectedUser.active ? 'تم إيقاف حساب الموظف' : 'تم إعادة تفعيل حساب الموظف'
+                              )
+                            }
+                            className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer ${
+                              selectedUser.active
+                                ? 'border border-amber-300 text-amber-700 dark:text-amber-300'
+                                : 'bg-emerald-600 text-white'
+                            }`}
+                          >
+                            {selectedUser.active ? 'تعطيل الحساب مؤقتاً' : 'تفعيل الحساب'}
+                          </button>
+
+                          {isSysOwner && selectedUser.role !== 'sys_owner' && (
+                            confirmDeleteUserId === selectedUser.id ? (
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const res = await mutate('DELETE', `/api/team/users/${selectedUser.id}`);
+                                    if (res) {
+                                      setConfirmDeleteUserId(null);
+                                      setSelectedUserId(null);
+                                      pushToast('info', `تم حذف حساب ${selectedUser.nameAr} بواسطة مالك النظام`);
+                                    }
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-semibold cursor-pointer"
+                                >
+                                  تأكيد الحذف
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteUserId(null)}
+                                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 cursor-pointer"
+                                >
+                                  إلغاء
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteUserId(selectedUser.id)}
+                                className="px-3 py-1.5 rounded-lg border border-red-300 dark:border-red-500/30 text-red-600 dark:text-red-400 font-semibold cursor-pointer"
+                              >
+                                حذف المستخدم
+                              </button>
                             )
-                          }
-                          className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer ${
-                            selectedUser.active
-                              ? 'border border-red-300 text-red-600 dark:text-red-400'
-                              : 'bg-emerald-600 text-white'
-                          }`}
-                        >
-                          {selectedUser.active ? 'تعطيل الحساب مؤقتاً' : 'تفعيل الحساب'}
-                        </button>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

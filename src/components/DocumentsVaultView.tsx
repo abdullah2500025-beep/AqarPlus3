@@ -2,7 +2,6 @@ import React from 'react';
 import { Archive, FolderOpen } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
 import { DocumentArchiveOcrPanel } from './DocumentArchiveOcrPanel';
-import { PrintViewButton } from './PrintViewButton';
 
 export function DocumentsVaultView() {
   const { state, lang, setActiveNav } = useAqar();
@@ -35,7 +34,6 @@ export function DocumentsVaultView() {
             <Archive className="w-3.5 h-3.5 text-amber-500" />
             <span>{isAr ? 'فتح الأرشيف الذكي' : 'Open Smart Archive'}</span>
           </button>
-          <PrintViewButton />
         </div>
       </div>
 

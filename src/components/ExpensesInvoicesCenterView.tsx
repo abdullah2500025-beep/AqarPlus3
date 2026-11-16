@@ -48,7 +48,6 @@ import {
 } from '../types/aqar';
 import { DEFAULT_CURRENCY_RATES_TO_SAR, formatCurrency } from '../utils/formatters';
 import { exportExpensesReportToExcel } from '../utils/excelExport';
-import { PrintViewButton } from './PrintViewButton';
 import { EXPENSE_CATEGORY_MAP, ExpenseWizardModal } from './ExpenseWizardModal';
 import { PIN_STORAGE_KEY } from './OnboardingJourney';
 import { triggerHaptic } from '../utils/haptics';
@@ -624,8 +623,6 @@ export function ExpensesInvoicesCenterView() {
             <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
             <span>{isAr ? 'تصدير Excel' : 'Export Excel'}</span>
           </button>
-
-          <PrintViewButton labelAr="طباعة التقرير" labelEn="Print Report" />
 
           {hasPermission('create_expense') && (
             <button

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Award,
   Building2,
@@ -7,35 +7,23 @@ import {
   ChevronRight,
   Code2,
   Copy,
-  Download,
   ExternalLink,
   FileText,
-  Layers,
   Loader2,
   Lock,
   Mail,
   MessageCircle,
-  Moon,
+  Phone,
   RefreshCw,
   ShieldCheck,
-  Smartphone,
   Sparkles,
   Star,
-  Sun,
   Trash2,
   X,
 } from 'lucide-react';
 import { useAqar } from '../context/AqarContext';
 import { triggerHaptic } from '../utils/haptics';
 import { PIN_STORAGE_KEY } from './OnboardingJourney';
-import {
-  AppIconVariant,
-  buildAppIconSvgString,
-  downloadAppIconPng1024,
-  downloadAppIconSvg,
-} from '../utils/appIconGenerator';
-
-type AdaptiveMask = 'squircle' | 'circle' | 'rounded' | 'teardrop';
 
 interface RippleState {
   id: string;
@@ -61,11 +49,6 @@ export function AboutAppView() {
   // Ripple micro-interaction state
   const [ripple, setRipple] = useState<RippleState | null>(null);
 
-  // App Icon Studio state
-  const [selectedVariant, setSelectedVariant] = useState<AppIconVariant>('primary_squircle');
-  const [adaptiveMask, setAdaptiveMask] = useState<AdaptiveMask>('squircle');
-  const [iconExportBusy, setIconExportBusy] = useState(false);
-
   // Interactive List Modal States
   const [showLegalModal, setShowLegalModal] = useState(false);
   const [showSupportModal, setShowSupportModal] = useState(false);
@@ -83,19 +66,6 @@ export function AboutAppView() {
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
-
-  const iconPreviewDataUri = useMemo(() => {
-    const svg = buildAppIconSvgString(selectedVariant);
-    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-  }, [selectedVariant]);
-
-  const adaptiveBgDataUri = useMemo(() => {
-    return `data:image/svg+xml;utf8,${encodeURIComponent(buildAppIconSvgString('adaptive_background'))}`;
-  }, []);
-
-  const adaptiveFgDataUri = useMemo(() => {
-    return `data:image/svg+xml;utf8,${encodeURIComponent(buildAppIconSvgString('adaptive_foreground'))}`;
-  }, []);
 
   if (!state) return null;
 
@@ -142,25 +112,6 @@ export function AboutAppView() {
       setUpdateCheckResult(msg);
       pushToast('success', msg);
     }, 1100);
-  };
-
-  const handleDownloadPng1024 = async (variant: AppIconVariant) => {
-    setIconExportBusy(true);
-    triggerHaptic('medium');
-    try {
-      await downloadAppIconPng1024(variant, `aqarplus-${variant}-1024x1024.png`);
-      pushToast('success', isAr ? 'تم تنزيل الأيقونة بدقة 1024×1024 PNG' : 'Downloaded 1024×1024 PNG');
-    } catch {
-      pushToast('error', isAr ? 'تعذر إنشاء ملف PNG' : 'PNG export failed');
-    } finally {
-      setIconExportBusy(false);
-    }
-  };
-
-  const handleDownloadSvg = (variant: AppIconVariant) => {
-    triggerHaptic('light');
-    downloadAppIconSvg(variant, `aqarplus-${variant}.svg`);
-    pushToast('success', isAr ? 'تم تنزيل ملف SVG المتجه بنجاح' : 'Downloaded SVG vector');
   };
 
   const handleSubmitRating = (e: React.FormEvent) => {
@@ -236,13 +187,6 @@ export function AboutAppView() {
         }, 1200);
       }, 250);
     }
-  };
-
-  const maskClass: Record<AdaptiveMask, string> = {
-    squircle: 'rounded-[26%]',
-    circle: 'rounded-full',
-    rounded: 'rounded-2xl',
-    teardrop: 'rounded-tl-[45%] rounded-tr-[45%] rounded-bl-[45%] rounded-br-xl',
   };
 
   const actionItems = [
@@ -328,18 +272,18 @@ export function AboutAppView() {
         />
 
         <div className="relative z-10 flex flex-col items-center text-center space-y-4 animate-aqar-hero">
-          {/* Large Centered Squircle App Icon with 3D Depth & Soft Halo */}
+          {/* Original Uploaded Official App Logo */}
           <div className="relative group">
             <div
               aria-hidden="true"
-              className="absolute -inset-4 rounded-[2.4rem] bg-gradient-to-tr from-amber-300/25 via-blue-400/25 to-white/20 blur-xl opacity-80 group-hover:opacity-100 transition-opacity duration-300"
+              className="absolute -inset-4 rounded-[2.4rem] bg-gradient-to-tr from-amber-300/20 via-blue-400/25 to-white/20 blur-xl opacity-80 group-hover:opacity-100 transition-opacity duration-300"
             />
-            <div className="relative w-32 h-32 sm:w-36 sm:h-36 rounded-[2rem] shadow-[0_24px_48px_-12px_rgba(0,0,0,0.65)] ring-1 ring-white/25 overflow-hidden bg-gradient-to-br from-[#26478D] to-[#0A0E1A] flex items-center justify-center transition-transform duration-300 group-hover:scale-[1.03]">
+            <div className="relative w-32 h-32 sm:w-36 sm:h-36 rounded-[2rem] shadow-[0_24px_48px_-12px_rgba(0,0,0,0.65)] ring-1 ring-white/25 overflow-hidden bg-white/95 p-4 flex items-center justify-center transition-transform duration-300 group-hover:scale-[1.03]">
               <img
-                src={iconPreviewDataUri}
-                alt="AqarPlus App Icon"
+                src="./assets/aistudio/Aqar_plus_8de53ba4.svg"
+                alt="AqarPlus Logo"
                 referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain"
               />
             </div>
           </div>
@@ -355,21 +299,6 @@ export function AboutAppView() {
             >
               الإصدار {APP_VERSION} ({APP_BUILD})
             </button>
-          </div>
-
-          {/* Official Attached Brand SVG Showcase */}
-          <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
-            <div className="inline-flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 text-xs">
-              <img
-                src="/assets/aistudio/Aqar_plus_8de53ba4.svg"
-                alt="AqarPlus Vector Logo"
-                referrerPolicy="no-referrer"
-                className="w-7 h-7 object-contain"
-              />
-              <span className="text-slate-100 font-medium">
-                {isAr ? 'الهوية الهندسية المعتمدة للتطبيق' : 'Official Architectural Emblem'}
-              </span>
-            </div>
           </div>
         </div>
       </section>
@@ -406,6 +335,24 @@ export function AboutAppView() {
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-medium">
               مطور نظم إدارة عقارية متكاملة
             </p>
+            <div className="flex flex-wrap items-center gap-3 pt-1.5 text-xs">
+              <a
+                href="tel:+966575161350"
+                dir="ltr"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 font-mono-num font-semibold"
+              >
+                <Phone className="w-3.5 h-3.5 text-emerald-500" />
+                <span>+966575161350</span>
+              </a>
+              <a
+                href="mailto:aaa15vip@gmail.com"
+                dir="ltr"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 font-mono-num font-semibold"
+              >
+                <Mail className="w-3.5 h-3.5 text-[#26478D] dark:text-blue-400" />
+                <span>aaa15vip@gmail.com</span>
+              </a>
+            </div>
           </div>
 
           <div className="w-12 h-12 rounded-xl bg-amber-500/12 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
@@ -454,7 +401,7 @@ export function AboutAppView() {
               />
             ) : (
               <img
-                src="/assets/aistudio/Aqar_plus_8de53ba4.svg"
+                src="./assets/aistudio/Aqar_plus_8de53ba4.svg"
                 alt={companyAffiliationName}
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-contain"
@@ -471,185 +418,6 @@ export function AboutAppView() {
         <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400 font-semibold">
           <Building2 className="w-4 h-4" />
           <span>ترخيص منشأة موثق</span>
-        </div>
-      </section>
-
-      {/* App Icon Design Kit (1024x1024 PNG, Android Adaptive Icon Layers & Dark/Light Variants) */}
-      <section className="p-6 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="space-y-0.5">
-            <div className="flex items-center gap-2 text-xs font-bold text-[#26478D] dark:text-blue-400">
-              <Layers className="w-4 h-4" />
-              <span>تصميم أيقونة التطبيق وحزمة التصدير التقنية (1024 × 1024)</span>
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              معاينة وتنزيل أيقونة iOS / Android بدقة 1024×1024، طبقات Android Adaptive Icon، ونسختي الوضع الداكن والفاتح.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={iconExportBusy}
-              onClick={() => handleDownloadPng1024(selectedVariant)}
-              className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#26478D] hover:bg-[#1e3a75] text-white text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>تنزيل PNG (1024×1024)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDownloadSvg(selectedVariant)}
-              className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>تنزيل SVG</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-          {/* Variant Picker Grid */}
-          <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {(
-              [
-                {
-                  id: 'primary_squircle',
-                  title: 'الأيقونة الرئيسية (Squircle)',
-                  desc: 'تدرج قطري #26478D ← #0A0E1A مع عمق 3D وتوهج',
-                  icon: Smartphone,
-                },
-                {
-                  id: 'dark_luminous',
-                  title: 'نسخة الوضع الداكن (Luminous)',
-                  desc: 'توهج مضيء قليلاً للشاشات الليلية الداكنة',
-                  icon: Moon,
-                },
-                {
-                  id: 'light_contrast',
-                  title: 'نسخة الوضع الفاتح (High Contrast)',
-                  desc: 'تباين عالٍ ومعدني للخلفيات البيضاء والفاتحة',
-                  icon: Sun,
-                },
-                {
-                  id: 'adaptive_foreground',
-                  title: 'طبقة Android الأمامية (Transparent)',
-                  desc: 'مفرغة بخلفية شفافة 1024×1024 لنظام أندرويد',
-                  icon: Layers,
-                },
-              ] as {
-                id: AppIconVariant;
-                title: string;
-                desc: string;
-                icon: React.ComponentType<{ className?: string }>;
-              }[]
-            ).map((v) => {
-              const Icon = v.icon;
-              const active = selectedVariant === v.id;
-              return (
-                <button
-                  key={v.id}
-                  type="button"
-                  onClick={() => {
-                    triggerHaptic('light');
-                    setSelectedVariant(v.id);
-                  }}
-                  className={`p-3.5 rounded-xl border text-start flex items-center gap-3 cursor-pointer transition-colors ${
-                    active
-                      ? 'border-[#26478D] bg-[#26478D]/10 dark:bg-blue-500/15'
-                      : 'border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/[0.03]'
-                  }`}
-                >
-                  <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-slate-200 dark:border-white/10 bg-slate-900/10 dark:bg-white/5 flex items-center justify-center">
-                    <img
-                      src={`data:image/svg+xml;utf8,${encodeURIComponent(buildAppIconSvgString(v.id))}`}
-                      alt={v.title}
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <div className="text-xs font-bold flex items-center gap-1.5">
-                      <Icon className="w-3.5 h-3.5 text-[#26478D] dark:text-blue-400 shrink-0" />
-                      <span className="truncate">{v.title}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2">{v.desc}</p>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Android Adaptive Icon Dual-Layer Live Preview */}
-          <div className="lg:col-span-5 p-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.02] flex flex-col justify-between space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold">معاينة Android Adaptive Icon</span>
-              <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/70 dark:bg-white/[0.06]">
-                {(
-                  [
-                    { id: 'squircle', label: 'Squircle' },
-                    { id: 'circle', label: 'دائرة' },
-                    { id: 'rounded', label: 'مربع' },
-                    { id: 'teardrop', label: 'قطرة' },
-                  ] as { id: AdaptiveMask; label: string }[]
-                ).map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => setAdaptiveMask(m.id)}
-                    className={`px-2 py-1 rounded text-[10px] font-semibold cursor-pointer ${
-                      adaptiveMask === m.id
-                        ? 'bg-white dark:bg-[#26478D] text-slate-900 dark:text-white'
-                        : 'text-slate-500 dark:text-slate-400'
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-around gap-3 py-2">
-              <div className="text-center space-y-1.5">
-                <div className="w-16 h-16 rounded-2xl overflow-hidden border border-slate-200 dark:border-white/10 mx-auto">
-                  <img src={adaptiveBgDataUri} alt="Background Layer" className="w-full h-full object-cover" />
-                </div>
-                <div className="text-[10px] text-slate-500">طبقة الخلفية</div>
-              </div>
-              <span className="text-slate-400 font-bold">+</span>
-              <div className="text-center space-y-1.5">
-                <div className="w-16 h-16 rounded-2xl overflow-hidden border border-dashed border-slate-300 dark:border-white/20 bg-slate-900/80 mx-auto">
-                  <img src={adaptiveFgDataUri} alt="Foreground Layer" className="w-full h-full object-contain" />
-                </div>
-                <div className="text-[10px] text-slate-500">الطبقة الأمامية</div>
-              </div>
-              <span className="text-slate-400 font-bold">=</span>
-              <div className="text-center space-y-1.5">
-                <div
-                  className={`relative w-16 h-16 overflow-hidden border border-white/25 shadow-lg mx-auto transition-all duration-200 ${maskClass[adaptiveMask]}`}
-                >
-                  <img src={adaptiveBgDataUri} alt="BG" className="absolute inset-0 w-full h-full object-cover" />
-                  <img src={adaptiveFgDataUri} alt="FG" className="relative w-full h-full object-contain" />
-                </div>
-                <div className="text-[10px] font-bold text-[#26478D] dark:text-blue-400">النتيجة التكيفية</div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-200/70 dark:border-white/10 text-[11px]">
-              <button
-                type="button"
-                onClick={() => handleDownloadPng1024('adaptive_background')}
-                className="text-[#26478D] dark:text-blue-400 font-semibold hover:underline cursor-pointer"
-              >
-                تنزيل الخلفية PNG
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDownloadPng1024('adaptive_foreground')}
-                className="text-[#26478D] dark:text-blue-400 font-semibold hover:underline cursor-pointer"
-              >
-                تنزيل الأمامية الشفافة PNG
-              </button>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -779,7 +547,7 @@ export function AboutAppView() {
             </p>
             <div className="space-y-2.5">
               <a
-                href={`https://wa.me/966500000000?text=${encodeURIComponent(
+                href={`https://wa.me/966575161350?text=${encodeURIComponent(
                   `مرحباً دعم عقار بلس (${APP_VERSION})، نود الاستفسار بخصوص حساب ${companyAffiliationName}`
                 )}`}
                 target="_blank"
@@ -788,30 +556,42 @@ export function AboutAppView() {
               >
                 <span className="inline-flex items-center gap-2">
                   <MessageCircle className="w-4 h-4" />
-                  <span>فتح محادثة واتساب مباشرة (رسالة جاهزة)</span>
+                  <span>
+                    واتساب مباشر (<span dir="ltr" className="font-mono-num">+966575161350</span>)
+                  </span>
                 </span>
                 <ExternalLink className="w-4 h-4" />
               </a>
               <a
-                href={`mailto:support@aqarplus.sa?subject=${encodeURIComponent('طلب دعم فني - AqarPlus')}`}
+                href="tel:+966575161350"
+                className="w-full min-h-[48px] px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/[0.04] font-semibold flex items-center justify-between"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Phone className="w-4 h-4 text-emerald-500" />
+                  <span dir="ltr" className="font-mono-num">+966575161350</span>
+                </span>
+                <ExternalLink className="w-4 h-4 text-slate-400" />
+              </a>
+              <a
+                href={`mailto:aaa15vip@gmail.com?subject=${encodeURIComponent('طلب دعم فني - AqarPlus')}`}
                 className="w-full min-h-[48px] px-4 py-3 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/[0.04] font-semibold flex items-center justify-between"
               >
                 <span className="inline-flex items-center gap-2">
                   <Mail className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
-                  <span className="font-mono-num">support@aqarplus.sa</span>
+                  <span className="font-mono-num">aaa15vip@gmail.com</span>
                 </span>
                 <ExternalLink className="w-4 h-4 text-slate-400" />
               </a>
               <button
                 type="button"
                 onClick={() => {
-                  navigator.clipboard?.writeText('support@aqarplus.sa');
-                  pushToast('success', 'تم نسخ بريد الدعم الفني');
+                  navigator.clipboard?.writeText('aaa15vip@gmail.com');
+                  pushToast('success', 'تم نسخ البريد الإلكتروني: aaa15vip@gmail.com');
                 }}
                 className="w-full min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/[0.04] font-medium flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Copy className="w-3.5 h-3.5" />
-                <span>نسخ البريد الإلكتروني للدعم</span>
+                <span>نسخ البريد الإلكتروني (aaa15vip@gmail.com)</span>
               </button>
             </div>
           </div>
