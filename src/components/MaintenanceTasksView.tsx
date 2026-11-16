@@ -5,15 +5,27 @@ import { MaintenanceTicket, TaskItem, TaskStatus, TicketPriority, TicketStatus }
 import { formatSar } from '../utils/formatters';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { CreateTaskQuickButton } from './CreateTaskQuickModal';
+import { UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 
 export function MaintenanceTasksView() {
-  const { state, currentUser, lang, hasPermission, mutate, pushToast } = useAqar();
+  const { state, currentUser, lang, hasPermission, hasModulePermission, mutate, pushToast } = useAqar();
   const [tab, setTab] = useState<'tickets' | 'tasks' | 'assets'>('tickets');
   const [showNewTicket, setShowNewTicket] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [editingTicket, setEditingTicket] = useState<MaintenanceTicket | null>(null);
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
   const [commentText, setCommentText] = useState('');
+
+  const canCreateTicket = hasModulePermission('maintenance', 'create') || hasPermission('manage_maintenance');
+  const canEditTicket = hasModulePermission('maintenance', 'edit') || hasPermission('execute_maintenance');
+  const canArchiveTicket = hasModulePermission('maintenance', 'delete_void') || hasModulePermission('archive', 'create') || hasPermission('manage_properties');
+  const canCreateTask = hasModulePermission('tasks', 'create') || hasPermission('manage_tasks');
+  const canArchiveTask = hasModulePermission('tasks', 'delete_void') || hasModulePermission('archive', 'create') || hasPermission('execute_maintenance');
+
+  useEscapeKey(showNewTicket, () => setShowNewTicket(false));
+  useEscapeKey(showNewTask, () => setShowNewTask(false));
+  useEscapeKey(Boolean(editingTicket), () => setEditingTicket(null));
+  useEscapeKey(Boolean(selectedTask), () => setSelectedTask(null));
 
   const [ticketForm, setTicketForm] = useState({
     unitId: '',
@@ -198,7 +210,7 @@ export function MaintenanceTasksView() {
             label={lang === 'ar' ? 'إسناد ذكي لمهمة' : 'Smart Assign Task'}
             compact
           />
-          {hasPermission('manage_maintenance') && tab === 'tickets' && (
+          {canCreateTicket && tab === 'tickets' && (
             <button
               onClick={() => setShowNewTicket(true)}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer"
@@ -207,7 +219,7 @@ export function MaintenanceTasksView() {
               <span>{lang === 'ar' ? 'فتح بلاغ صيانة' : 'New Ticket'}</span>
             </button>
           )}
-          {hasPermission('manage_tasks') && tab === 'tasks' && (
+          {canCreateTask && tab === 'tasks' && (
             <button
               onClick={() => setShowNewTask(true)}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer"
@@ -254,7 +266,7 @@ export function MaintenanceTasksView() {
                     التقدير: {formatSar(tkt.estimatedCost, lang)} · الفعلي: {formatSar(tkt.actualCost, lang)}
                     {linkedExp && ` · مصروف ${linkedExp.expenseNumber} (${linkedExp.approvalStatus})`}
                   </div>
-                  {hasPermission('execute_maintenance') && (
+                  {canEditTicket && (
                     <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         onClick={() => {
@@ -271,7 +283,7 @@ export function MaintenanceTasksView() {
                         <Wrench className="w-3 h-3" />
                         <span>تحديث التنفيذ والتكلفة</span>
                       </button>
-                      {!tkt.archivedAt && (tkt.status === 'مكتمل' || tkt.status === 'مغلق' || hasPermission('manage_properties')) && (
+                      {!tkt.archivedAt && (tkt.status === 'مكتمل' || tkt.status === 'مغلق' || canArchiveTicket) && (
                         <MoveToArchiveButton
                           category="tickets"
                           entityId={tkt.id}
@@ -370,9 +382,7 @@ export function MaintenanceTasksView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">تحديث بلاغ الصيانة ({editingTicket.ticketNumber})</h3>
-              <button type="button" onClick={() => setEditingTicket(null)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setEditingTicket(null)} lang={lang} />
             </div>
             <div className="space-y-3 text-xs">
               <select
@@ -442,7 +452,7 @@ export function MaintenanceTasksView() {
                 <h3 className="text-base font-bold mt-0.5">{activeTask.title}</h3>
               </div>
               <div className="flex items-center gap-2">
-                {!activeTask.archivedAt && hasPermission('execute_maintenance') && (
+                {!activeTask.archivedAt && canArchiveTask && (
                   <MoveToArchiveButton
                     category="tickets"
                     entityId={activeTask.id}
@@ -452,9 +462,7 @@ export function MaintenanceTasksView() {
                     onArchived={() => setSelectedTask(null)}
                   />
                 )}
-                <button onClick={() => setSelectedTask(null)} className="cursor-pointer">
-                  <X className="w-4 h-4" />
-                </button>
+                <UnifiedModalCloseButton onClick={() => setSelectedTask(null)} lang={lang} />
               </div>
             </div>
 
@@ -529,9 +537,7 @@ export function MaintenanceTasksView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">فتح بلاغ صيانة رسمي</h3>
-              <button type="button" onClick={() => setShowNewTicket(false)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowNewTicket(false)} lang={lang} />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <select
@@ -610,9 +616,7 @@ export function MaintenanceTasksView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">إضافة مهمة تشغيلية للفريق</h3>
-              <button type="button" onClick={() => setShowNewTask(false)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowNewTask(false)} lang={lang} />
             </div>
             <div className="space-y-3 text-xs">
               <input

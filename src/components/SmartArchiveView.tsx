@@ -51,6 +51,7 @@ import { formatDateTime } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
 import { QrCodeSvg } from './QrCodeSvg';
 import { exportArchiveRecords, exportSeparateAuditArchiveBundle, ArchiveExportRow } from '../utils/archiveExport';
+import { UnifiedBackButton, UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 
 interface ArchiveItemUnified {
   uid: string;
@@ -165,7 +166,7 @@ function MiniSparkline({ counts, strokeColor }: { counts: number[]; strokeColor:
 }
 
 export function SmartArchiveView() {
-  const { state, currentUser, lang, mutate, pushToast, formatInCurrency, convertToBase, baseCurrency } = useAqar();
+  const { state, currentUser, lang, hasModulePermission, mutate, pushToast, formatInCurrency, convertToBase, baseCurrency } = useAqar();
   const isAr = lang === 'ar';
 
   const [activeCategory, setActiveCategory] = useState<ArchiveCategoryId | null>(null);
@@ -195,6 +196,16 @@ export function SmartArchiveView() {
 
   const [reissueReceipt, setReissueReceipt] = useState<Payment | null>(null);
 
+  const canRestoreArchive = hasModulePermission('archive', 'edit') || hasModulePermission('archive', 'approve') || hasModulePermission('archive', 'manage');
+  const canExportArchive = hasModulePermission('archive', 'export');
+  const canManageArchive = hasModulePermission('archive', 'manage');
+
+  useEscapeKey(Boolean(restoreTarget), () => setRestoreTarget(null));
+  useEscapeKey(Boolean(selectedRecord) && !restoreTarget, () => setSelectedRecord(null));
+  useEscapeKey(showCompareModal, () => setShowCompareModal(false));
+  useEscapeKey(showSaveFilterModal, () => setShowSaveFilterModal(false));
+  useEscapeKey(Boolean(reissueReceipt), () => setReissueReceipt(null));
+
   const allowedCategories = useMemo<ArchiveCategoryId[]>(() => {
     if (!currentUser) return [];
     return ROLE_ARCHIVE_ACCESS[currentUser.role] || [];
@@ -204,7 +215,8 @@ export function SmartArchiveView() {
   const canWriteCategory = (cat: ArchiveCategoryId) => {
     if (!currentUser) return false;
     if (currentUser.role === 'owner') return false;
-    if (currentUser.role === 'leasing' && cat !== 'tenants') return false;
+    if (!canRestoreArchive) return false;
+    if (currentUser.role === 'leasing' && cat !== 'tenants' && !canManageArchive) return false;
     return allowedCategories.includes(cat);
   };
 
@@ -872,17 +884,12 @@ export function SmartArchiveView() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
           {activeCategory ? (
-            <button
-              type="button"
-              onClick={() => {
-                triggerHaptic('light');
-                setActiveCategory(null);
-              }}
-              className="min-h-[44px] min-w-[44px] rounded-2xl border border-slate-200 dark:border-white/15 glass-surface flex items-center justify-center hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer shrink-0"
-              aria-label={isAr ? 'العودة لشبكة الأرشيف' : 'Back to Archive Grid'}
-            >
-              {isAr ? <ArrowRight className="w-5 h-5" /> : <ArrowLeft className="w-5 h-5" />}
-            </button>
+            <UnifiedBackButton
+              onClick={() => setActiveCategory(null)}
+              lang={lang}
+              label={isAr ? 'شبكة الأرشيف' : 'Archive Grid'}
+              className="shrink-0"
+            />
           ) : (
             <div className="w-12 h-12 rounded-2xl bg-[#26478D]/15 dark:bg-blue-500/20 border border-[#26478D]/25 dark:border-blue-400/30 flex items-center justify-center text-[#26478D] dark:text-blue-300 shrink-0">
               <Archive className="w-6 h-6" />
@@ -1013,7 +1020,7 @@ export function SmartArchiveView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0 border-t xl:border-t-0 xl:border-s border-slate-200/80 dark:border-white/10 pt-3 xl:pt-0 xl:ps-5">
-          {currentUser.role === 'gm' && (
+          {canManageArchive && (
             <button
               type="button"
               disabled={isBusy}
@@ -1024,18 +1031,20 @@ export function SmartArchiveView() {
               <span>{isAr ? 'تشغيل الأرشفة المجدولة' : 'Run Nightly Archival'}</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              const file = exportSeparateAuditArchiveBundle(state, currentUser);
-              triggerHaptic('success');
-              pushToast('success', isAr ? `تم تصدير حزمة التدقيق المستقلة (${file})` : `Exported ${file}`);
-            }}
-            className="inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-xl bg-[#26478D] text-white hover:bg-[#1e3a75] text-xs font-semibold cursor-pointer whitespace-nowrap"
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>{isAr ? 'تصدير أرشيف منفصل للتدقيق' : 'Export Audit Bundle'}</span>
-          </button>
+          {canExportArchive && (
+            <button
+              type="button"
+              onClick={() => {
+                const file = exportSeparateAuditArchiveBundle(state, currentUser);
+                triggerHaptic('success');
+                pushToast('success', isAr ? `تم تصدير حزمة التدقيق المستقلة (${file})` : `Exported ${file}`);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-xl bg-[#26478D] text-white hover:bg-[#1e3a75] text-xs font-semibold cursor-pointer whitespace-nowrap"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>{isAr ? 'تصدير أرشيف منفصل للتدقيق' : 'Export Audit Bundle'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1327,30 +1336,34 @@ export function SmartArchiveView() {
                   <span>{isAr ? 'ختم مائي "أرشيف"' : 'Archive Watermark'}</span>
                 </label>
 
-                <button
-                  type="button"
-                  onClick={() => handleExport('pdf')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/15 hover:bg-slate-100 dark:hover:bg-white/10 text-xs font-medium cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>PDF</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleExport('excel')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 text-xs font-medium cursor-pointer"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>Excel</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleExport('csv')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/15 hover:bg-slate-100 dark:hover:bg-white/10 text-xs font-medium cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>CSV</span>
-                </button>
+                {canExportArchive && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleExport('pdf')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/15 hover:bg-slate-100 dark:hover:bg-white/10 text-xs font-medium cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>PDF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleExport('excel')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 text-xs font-medium cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5" />
+                      <span>Excel</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleExport('csv')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/15 hover:bg-slate-100 dark:hover:bg-white/10 text-xs font-medium cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>CSV</span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
@@ -1649,13 +1662,7 @@ export function SmartArchiveView() {
                 <h3 className="text-lg font-bold mt-1">{selectedRecord.title}</h3>
                 <p className="text-xs text-slate-500 mt-0.5">{selectedRecord.subtitle}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedRecord(null)}
-                className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setSelectedRecord(null)} lang={lang} />
             </div>
 
             {/* Key Info Strip */}
@@ -1840,14 +1847,16 @@ export function SmartArchiveView() {
             </div>
 
             <div className="pt-3 border-t border-slate-200 dark:border-white/10 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => handleExport('pdf', [selectedRecord])}
-                className="inline-flex items-center gap-1.5 px-4 min-h-[42px] rounded-xl border border-slate-200 dark:border-white/15 text-xs font-semibold cursor-pointer"
-              >
-                <Printer className="w-4 h-4" />
-                <span>{isAr ? 'طباعة / PDF بختم أرشيف' : 'Print / PDF'}</span>
-              </button>
+              {canExportArchive && (
+                <button
+                  type="button"
+                  onClick={() => handleExport('pdf', [selectedRecord])}
+                  className="inline-flex items-center gap-1.5 px-4 min-h-[42px] rounded-xl border border-slate-200 dark:border-white/15 text-xs font-semibold cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>{isAr ? 'طباعة / PDF بختم أرشيف' : 'Print / PDF'}</span>
+                </button>
+              )}
               {canWriteCategory(selectedRecord.category) && (
                 <button
                   type="button"
@@ -1877,9 +1886,7 @@ export function SmartArchiveView() {
                   <p className="text-xs text-slate-500 font-mono-num">{restoreTarget.reference}</p>
                 </div>
               </div>
-              <button type="button" onClick={() => setRestoreTarget(null)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setRestoreTarget(null)} lang={lang} />
             </div>
 
             <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200/80 dark:border-white/10 text-xs space-y-1">
@@ -1955,9 +1962,7 @@ export function SmartArchiveView() {
                 <GitCompareArrows className="w-5 h-5 text-blue-500" />
                 <span>{isAr ? 'مقارنة عقدين مؤرشفين' : 'Compare Two Archived Contracts'}</span>
               </div>
-              <button type="button" onClick={() => setShowCompareModal(false)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowCompareModal(false)} lang={lang} />
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -1998,9 +2003,7 @@ export function SmartArchiveView() {
           <form onSubmit={handleSaveFilter} className="w-full max-w-md rounded-3xl border border-slate-200 dark:border-white/15 bg-white dark:bg-[#111728] p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">{isAr ? 'حفظ فلتر بحث مفضل' : 'Save Archive Filter'}</h3>
-              <button type="button" onClick={() => setShowSaveFilterModal(false)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowSaveFilterModal(false)} lang={lang} />
             </div>
             <input
               type="text"
@@ -2030,9 +2033,7 @@ export function SmartArchiveView() {
               <h3 className="text-base font-bold">
                 {isAr ? `نسخة سند قبض أرشيفية — ${reissueReceipt.receiptNumber}` : `Archive Receipt Copy — ${reissueReceipt.receiptNumber}`}
               </h3>
-              <button type="button" onClick={() => setReissueReceipt(null)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setReissueReceipt(null)} lang={lang} />
             </div>
             <div className="space-y-2 text-xs">
               <div className="flex justify-between">

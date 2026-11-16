@@ -23,11 +23,12 @@ export interface EncryptedBackupEnvelope {
 }
 
 const SCRYPT_KEYLEN = 64;
+const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 };
 const PBKDF2_ITERATIONS = 100_000;
 
 export function hashSecret(secret: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
-  const derived = crypto.scryptSync(secret, salt, SCRYPT_KEYLEN).toString('hex');
+  const derived = crypto.scryptSync(secret, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS).toString('hex');
   return `scrypt$${salt}$${derived}`;
 }
 
@@ -38,7 +39,7 @@ export function verifySecret(secret: string, storedHash: string | null | undefin
   const [, salt, hexHash] = parts;
   if (!salt || !hexHash) return false;
   try {
-    const derived = crypto.scryptSync(secret, salt, SCRYPT_KEYLEN);
+    const derived = crypto.scryptSync(secret, salt, SCRYPT_KEYLEN, SCRYPT_PARAMS);
     const expected = Buffer.from(hexHash, 'hex');
     if (derived.length !== expected.length) return false;
     return crypto.timingSafeEqual(derived, expected);
@@ -82,6 +83,32 @@ export function verifySessionToken(token: string, secret: string): SessionTokenP
     const payload = JSON.parse(fromBase64Url(encodedPayload).toString('utf8')) as SessionTokenPayload;
     if (!payload || !payload.uid || !payload.sid || typeof payload.exp !== 'number') return null;
     if (Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export function signEphemeralToken<T extends { exp: number }>(payload: T, secret: string): string {
+  const encodedPayload = toBase64Url(JSON.stringify(payload));
+  const sig = crypto.createHmac('sha256', secret).update(`eph:${encodedPayload}`).digest();
+  return `${encodedPayload}.${toBase64Url(sig)}`;
+}
+
+export function verifyEphemeralToken<T extends { exp: number }>(token: string, secret: string): T | null {
+  if (!token || !secret) return null;
+  const dotIdx = token.indexOf('.');
+  if (dotIdx <= 0) return null;
+  const encodedPayload = token.slice(0, dotIdx);
+  const encodedSig = token.slice(dotIdx + 1);
+  if (!encodedPayload || !encodedSig) return null;
+  try {
+    const expectedSig = crypto.createHmac('sha256', secret).update(`eph:${encodedPayload}`).digest();
+    const providedSig = fromBase64Url(encodedSig);
+    if (expectedSig.length !== providedSig.length) return null;
+    if (!crypto.timingSafeEqual(expectedSig, providedSig)) return null;
+    const payload = JSON.parse(fromBase64Url(encodedPayload).toString('utf8')) as T;
+    if (!payload || typeof payload.exp !== 'number' || Date.now() > payload.exp) return null;
     return payload;
   } catch {
     return null;

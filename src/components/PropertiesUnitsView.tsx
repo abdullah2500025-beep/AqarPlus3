@@ -31,6 +31,7 @@ import { QrCodeSvg } from './QrCodeSvg';
 import { SwipeableRow } from './SwipeableRow';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { CreateTaskQuickButton } from './CreateTaskQuickModal';
+import { UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 import { readFileAsDataUrl, runGeminiOcrExtraction } from '../utils/ocrClient';
 import unitApartmentImg from '../assets/images/unit_modern_apartment_1794682469428.jpg';
 import unitVillaImg from '../assets/images/unit_luxury_villa_1794682469756.jpg';
@@ -99,7 +100,7 @@ function UnitStatusIcon({ status }: { status: UnitStatus }) {
 }
 
 export function PropertiesUnitsView() {
-  const { state, currentUser, lang, hasPermission, mutate, pushToast, startLeasingWizardForUnit, setActiveNav } = useAqar();
+  const { state, currentUser, lang, hasPermission, hasModulePermission, mutate, pushToast, startLeasingWizardForUnit, setActiveNav } = useAqar();
   const [activeTab, setActiveTab] = useState<'portfolio' | 'meters'>('portfolio');
   const [submittingProp, setSubmittingProp] = useState(false);
   const [submittingUnit, setSubmittingUnit] = useState(false);
@@ -116,6 +117,19 @@ export function PropertiesUnitsView() {
   const [showAddMeterReading, setShowAddMeterReading] = useState(false);
   const [showAdvancedProp, setShowAdvancedProp] = useState(false);
   const [showUnitTechDetails, setShowUnitTechDetails] = useState(false);
+
+  const canCreateProperty = hasModulePermission('properties', 'create') || hasPermission('manage_properties');
+  const canCreateUnit = hasModulePermission('units', 'create') || hasPermission('manage_properties');
+  const canEditUnit = hasModulePermission('units', 'edit') || hasPermission('manage_properties');
+  const canEditMeter = hasModulePermission('properties', 'edit') || hasModulePermission('units', 'edit') || hasPermission('manage_properties');
+  const canArchiveUnit = hasModulePermission('units', 'delete_void') || hasModulePermission('archive', 'create') || hasPermission('manage_properties');
+  const canCreateContract = hasModulePermission('contracts', 'create') || hasPermission('manage_contracts');
+  const canEditTenant = hasModulePermission('tenants', 'edit') || hasPermission('manage_tenants');
+
+  useEscapeKey(showAddProp, () => setShowAddProp(false));
+  useEscapeKey(showAddUnit, () => setShowAddUnit(false));
+  useEscapeKey(showAddMeterReading, () => setShowAddMeterReading(false));
+  useEscapeKey(Boolean(selectedUnit) && !showAddMeterReading, () => setSelectedUnit(null));
   const [meterForm, setMeterForm] = useState({
     propertyId: '',
     unitId: '',
@@ -587,7 +601,7 @@ export function PropertiesUnitsView() {
 
         <div className="flex flex-wrap items-center gap-2 no-print">
           {activeTab === 'meters' ? (
-            hasPermission('manage_properties') && (
+            canEditMeter && (
               <button
                 type="button"
                 onClick={() => openMeterModalFor({ propertyId: state.properties[0]?.id })}
@@ -598,8 +612,8 @@ export function PropertiesUnitsView() {
               </button>
             )
           ) : (
-            hasPermission('manage_properties') && (
-              <>
+            <>
+              {canCreateProperty && (
                 <button
                   onClick={() => setShowAddProp(true)}
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer whitespace-nowrap shrink-0"
@@ -607,6 +621,8 @@ export function PropertiesUnitsView() {
                   <Plus className="w-3.5 h-3.5" />
                   <span>{lang === 'ar' ? 'عقار جديد' : 'Add Property'}</span>
                 </button>
+              )}
+              {canCreateUnit && (
                 <button
                   onClick={() => {
                     setUnitForm((f) => ({ ...f, propertyId: state.properties[0]?.id || '' }));
@@ -617,8 +633,8 @@ export function PropertiesUnitsView() {
                   <Plus className="w-3.5 h-3.5" />
                   <span>{lang === 'ar' ? 'وحدة جديدة' : 'Add Unit'}</span>
                 </button>
-              </>
-            )
+              )}
+            </>
           )}
         </div>
       </div>
@@ -744,7 +760,7 @@ export function PropertiesUnitsView() {
                   )}
                 </div>
 
-                {hasPermission('manage_properties') && (
+                {canEditMeter && (
                   <button
                     type="button"
                     onClick={() =>
@@ -1223,13 +1239,11 @@ export function PropertiesUnitsView() {
                 className="w-full h-full object-cover opacity-90"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/25 to-slate-950/20" />
-              <button
+              <UnifiedModalCloseButton
                 onClick={() => setSelectedUnit(null)}
-                className="absolute top-4 end-4 min-w-[44px] min-h-[44px] rounded-xl bg-black/45 text-white hover:bg-black/65 flex items-center justify-center backdrop-blur-md cursor-pointer"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5" />
-              </button>
+                lang={lang}
+                className="absolute top-4 end-4 !min-w-[44px] !min-h-[44px] !bg-black/45 !text-white !border-white/20 hover:!bg-black/65 backdrop-blur-md"
+              />
               <div className="absolute bottom-4 inset-x-5 flex items-end justify-between gap-4 text-white">
                 <div className="min-w-0">
                   <div className="text-xs text-white/80 truncate">
@@ -1254,7 +1268,7 @@ export function PropertiesUnitsView() {
             <div className="p-6 space-y-6">
 
             {/* Sequential Action Card when Unit is Available / Non-Leased */}
-            {hasPermission('manage_contracts') && activeSelectedUnit.status !== 'مؤجرة' && (
+            {canCreateContract && activeSelectedUnit.status !== 'مؤجرة' && (
               <div className="p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.07] flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
@@ -1282,7 +1296,7 @@ export function PropertiesUnitsView() {
             )}
 
             {/* Status Update */}
-            {hasPermission('manage_properties') && (
+            {canEditUnit && (
               <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 space-y-2.5">
                 <div className="text-xs font-semibold">
                   {lang === 'ar' ? 'تحديث حالة الوحدة التشغيلية' : 'Update Unit Operational Status'}
@@ -1315,7 +1329,7 @@ export function PropertiesUnitsView() {
                       relatedLabel={`وحدة ${activeSelectedUnit.unitNumber}`}
                       compact
                     />
-                    {activeSelectedUnit.status !== 'مؤجرة' && activeSelectedUnit.status !== 'مؤرشفة' && !activeSelectedUnit.archivedAt && (
+                    {canArchiveUnit && activeSelectedUnit.status !== 'مؤجرة' && activeSelectedUnit.status !== 'مؤرشفة' && !activeSelectedUnit.archivedAt && (
                       <MoveToArchiveButton
                         category="units"
                         entityId={activeSelectedUnit.id}
@@ -1330,7 +1344,7 @@ export function PropertiesUnitsView() {
             )}
 
             {/* Administrative Tenant Link (Explicitly Separate from Contract Creation!) */}
-            {hasPermission('manage_tenants') && activeSelectedUnit.status !== 'مؤجرة' && (
+            {canEditTenant && activeSelectedUnit.status !== 'مؤجرة' && (
               <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-semibold flex items-center gap-1.5">
@@ -1403,7 +1417,7 @@ export function PropertiesUnitsView() {
                         </div>
                         <div className="font-mono-num font-semibold mt-1">{activeSelectedUnit.electricityMeter || '—'}</div>
                       </div>
-                      {activeSelectedUnit.electricityMeter && hasPermission('manage_properties') && (
+                      {activeSelectedUnit.electricityMeter && canEditMeter && (
                         <button
                           type="button"
                           onClick={() =>
@@ -1428,7 +1442,7 @@ export function PropertiesUnitsView() {
                         </div>
                         <div className="font-mono-num font-semibold mt-1">{activeSelectedUnit.waterMeter || '—'}</div>
                       </div>
-                      {activeSelectedUnit.waterMeter && hasPermission('manage_properties') && (
+                      {activeSelectedUnit.waterMeter && canEditMeter && (
                         <button
                           type="button"
                           onClick={() =>
@@ -1504,9 +1518,7 @@ export function PropertiesUnitsView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">{lang === 'ar' ? 'إضافة عقار جديد' : 'New Property'}</h3>
-              <button type="button" onClick={() => setShowAddProp(false)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowAddProp(false)} lang={lang} />
             </div>
 
             <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.06] flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -1655,9 +1667,7 @@ export function PropertiesUnitsView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">{lang === 'ar' ? 'إضافة وحدة جديدة' : 'New Unit'}</h3>
-              <button type="button" onClick={() => setShowAddUnit(false)} className="min-w-[40px] min-h-[40px] flex items-center justify-center cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowAddUnit(false)} lang={lang} />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <select
@@ -1762,13 +1772,7 @@ export function PropertiesUnitsView() {
                     : 'Bill currency selection is exclusive to utility meters'}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowAddMeterReading(false)}
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowAddMeterReading(false)} lang={lang} />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
@@ -1976,7 +1980,7 @@ export function PropertiesUnitsView() {
       )}
 
       {/* Mobile Thumb-Zone FAB */}
-      {hasPermission('manage_properties') && (
+      {(activeTab === 'meters' ? canEditMeter : canCreateUnit) && (
         <button
           type="button"
           onClick={() => {

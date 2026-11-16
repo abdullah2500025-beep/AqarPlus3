@@ -24,6 +24,7 @@ import { ReceiptModal } from './ReceiptModal';
 import { QrVerifyModal } from './QrVerifyModal';
 import { SwipeableRow } from './SwipeableRow';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
+import { UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 
 export function FinanceCollectionView() {
   const {
@@ -31,6 +32,7 @@ export function FinanceCollectionView() {
     currentUser,
     lang,
     hasPermission,
+    hasModulePermission,
     mutate,
     pushToast,
     baseCurrency,
@@ -53,6 +55,12 @@ export function FinanceCollectionView() {
     maxAmount: number;
     idempotencyKey: string;
   } | null>(null);
+
+  const canCreatePayment = hasModulePermission('payments', 'create') || hasPermission('collect_payments');
+  const canExportFinance = hasModulePermission('finance', 'export') || hasModulePermission('payments', 'export') || hasModulePermission('reports', 'export');
+  const canArchiveReceipt = hasModulePermission('receipts', 'delete_void') || hasModulePermission('archive', 'create') || hasPermission('collect_payments');
+
+  useEscapeKey(Boolean(payModal?.open), () => setPayModal(null));
 
   const [payForm, setPayForm] = useState({
     amount: 0,
@@ -306,16 +314,18 @@ export function FinanceCollectionView() {
             <span>{lang === 'ar' ? 'فحص رمز QR' : 'Verify QR'}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handleExportExcel}
-            className="inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-xl text-xs font-semibold border border-emerald-300 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>{lang === 'ar' ? 'تصدير Excel للمراجعة' : 'Export Excel Report'}</span>
-          </button>
+          {canExportFinance && (
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              className="inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-xl text-xs font-semibold border border-emerald-300 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>{lang === 'ar' ? 'تصدير Excel للمراجعة' : 'Export Excel Report'}</span>
+            </button>
+          )}
 
-          {hasPermission('collect_payments') && (
+          {canCreatePayment && (
             <button
               onClick={() => openCollectModal()}
               className="inline-flex items-center gap-1.5 px-4 min-h-[40px] rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer whitespace-nowrap shrink-0"
@@ -417,7 +427,7 @@ export function FinanceCollectionView() {
               const unit = state.units.find((u) => u.id === inst.unitId);
               const contract = state.contracts.find((c) => c.id === inst.contractId);
               const cur = inst.currency || contract?.currency || 'SAR';
-              const canCollect = inst.remainingAmount > 0 && hasPermission('collect_payments');
+              const canCollect = inst.remainingAmount > 0 && canCreatePayment;
               return (
                 <SwipeableRow
                   key={inst.id}
@@ -522,7 +532,7 @@ export function FinanceCollectionView() {
                       </td>
                       <td className="py-3 px-4 font-semibold">{inst.status}</td>
                       <td className="py-3 px-4">
-                        {inst.remainingAmount > 0 && hasPermission('collect_payments') ? (
+                        {inst.remainingAmount > 0 && canCreatePayment ? (
                           <button
                             onClick={() => openCollectModal(inst)}
                             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#26478D] text-white text-[11px] font-semibold hover:bg-[#1e3a75] cursor-pointer whitespace-nowrap"
@@ -589,7 +599,7 @@ export function FinanceCollectionView() {
                           <Receipt className="w-3.5 h-3.5" />
                           <span>{lang === 'ar' ? 'معاينة' : 'Open'}</span>
                         </button>
-                        {!pay.archivedAt && hasPermission('collect_payments') && (
+                        {!pay.archivedAt && canArchiveReceipt && (
                           <MoveToArchiveButton
                             category="receipts"
                             entityId={pay.id}
@@ -638,13 +648,7 @@ export function FinanceCollectionView() {
                       : 'Review, Sign & Issue Receipt'}
                   </h3>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setPayModal(null)}
-                  className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <UnifiedModalCloseButton onClick={() => setPayModal(null)} lang={lang} />
               </div>
 
               {/* 2-Step Bar */}
@@ -913,7 +917,7 @@ export function FinanceCollectionView() {
       })()}
 
       {/* Mobile Thumb-Zone FAB */}
-      {hasPermission('collect_payments') && (
+      {canCreatePayment && (
         <button
           type="button"
           onClick={() => openCollectModal()}

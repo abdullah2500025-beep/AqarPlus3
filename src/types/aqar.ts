@@ -30,30 +30,54 @@ export type PermissionKey =
   | 'backup_restore'
   | 'view_audit';
 
-export type PermissionLevel = 'view' | 'create' | 'edit' | 'delete_void' | 'approve';
+export type PermissionLevel =
+  | 'view'
+  | 'create'
+  | 'edit'
+  | 'delete_void'
+  | 'approve'
+  | 'export'
+  | 'manage';
 
 export type PermissionModuleKey =
+  | 'dashboard'
   | 'properties'
+  | 'units'
   | 'tenants'
   | 'contracts'
+  | 'payments'
   | 'finance'
+  | 'receipts'
   | 'expenses'
   | 'maintenance'
   | 'tasks'
+  | 'reports'
   | 'documents'
   | 'archive'
   | 'team'
   | 'audit'
+  | 'settings'
   | 'backups';
 
 export type StaffStatusState = 'متصل' | 'مشغول' | 'غير متصل';
+
+export type AccountStatus =
+  | 'بانتظار التفعيل'
+  | 'نشط'
+  | 'موقوف'
+  | 'مرفوض'
+  | 'منتهي الوصول';
 
 export interface StaffSecurityConfig {
   twoFactorEnabled?: boolean;
   biometricEnabled?: boolean;
   hasPin?: boolean;
+  pinEnabled?: boolean;
   failedAttempts?: number;
   lockedUntil?: string;
+  pinFailedAttempts?: number;
+  pinLockedUntil?: string;
+  requirePasswordAfterPinLock?: boolean;
   lastPasswordChangedAt?: string;
   requirePasswordChange90d?: boolean;
   tempPasswordSet?: boolean;
@@ -70,21 +94,38 @@ export interface StaffNotificationPrefs {
   urgentTicket?: boolean;
 }
 
+export interface PendingContactVerification {
+  targetValue: string;
+  requestedAt: string;
+  expiresAt: string;
+}
+
 export interface StaffUser {
   id: string;
   companyId?: string;
   nameAr: string;
   nameEn: string;
+  username?: string;
+  jobTitle?: string;
+  department?: string;
   role: RoleKey;
   roleLabelAr: string;
   roleLabelEn: string;
+  customRoleId?: string;
   email: string;
   phone: string;
+  secondaryPhone?: string;
   approvalLimitSar: number;
   active: boolean;
+  accountStatus?: AccountStatus;
   ownerId?: string;
   deviceName: string;
   lastActiveAt: string;
+  lastLoginAt?: string;
+  joinedAt?: string;
+  createdAt?: string;
+  terminatedAt?: string;
+  terminationReason?: string;
   statusState?: StaffStatusState;
   specialty?: string;
   avatarDataUrl?: string;
@@ -94,6 +135,79 @@ export interface StaffUser {
   lastActivitySummary?: string;
   security?: StaffSecurityConfig;
   notificationPrefs?: StaffNotificationPrefs;
+  pendingEmailVerification?: PendingContactVerification;
+  pendingPhoneVerification?: PendingContactVerification;
+}
+
+export type EmployeeInviteChannel = 'whatsapp' | 'email' | 'sms' | 'copy_link';
+export type EmployeeInviteStatus = 'بانتظار التفعيل' | 'مقبولة' | 'ملغاة' | 'منتهية';
+
+export interface EmployeeInvitation {
+  id: string;
+  companyId: string;
+  companyNameAr: string;
+  userId: string;
+  fullName: string;
+  jobTitle?: string;
+  department?: string;
+  email: string;
+  phone: string;
+  secondaryPhone?: string;
+  username?: string;
+  role: RoleKey;
+  roleLabelAr: string;
+  customRoleId?: string;
+  channel: EmployeeInviteChannel;
+  deliveryMode: 'handoff' | 'gateway';
+  deliveryNote: string;
+  status: EmployeeInviteStatus;
+  tokenPreview: string;
+  expiresAt: string;
+  sentAt: string;
+  acceptedAt?: string;
+  canceledAt?: string;
+  invitedByUserId: string;
+  invitedByName: string;
+  resendCount: number;
+}
+
+export interface CustomRoleDefinition {
+  id: string;
+  companyId: string;
+  nameAr: string;
+  nameEn: string;
+  descriptionAr: string;
+  baseRoleKey: RoleKey;
+  isSystemTemplate?: boolean;
+  legacyPermissions: PermissionKey[];
+  modulePermissions: Partial<Record<PermissionModuleKey, PermissionLevel[]>>;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserSessionSummary {
+  id: string;
+  userId: string;
+  deviceName: string;
+  appType?: 'web' | 'desktop';
+  deviceId?: string;
+  ipAddress?: string;
+  rememberMe: boolean;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  isCurrent?: boolean;
+}
+
+export interface TrustedDeviceSummary {
+  id: string;
+  userId: string;
+  deviceName: string;
+  appType: 'web' | 'desktop';
+  trustedAt: string;
+  lastUsedAt: string;
+  isCurrent?: boolean;
 }
 
 export type PropertyType = 'سكني' | 'تجاري' | 'إداري' | 'مختلط';
@@ -1104,6 +1218,7 @@ export interface SecurityPolicy {
   autoLockMinutes: number;
   maxFailedAttempts: number;
   require2faForManagersAndAccountants: boolean;
+  requireMfaOnNewDevice?: boolean;
 }
 
 export interface BackupSnapshot {
@@ -1601,7 +1716,10 @@ export interface AqarDatabaseState {
   settings: CompanySettings;
   companies?: CompanyProfile[];
   users: StaffUser[];
+  employeeInvitations?: EmployeeInvitation[];
+  customRoles?: CustomRoleDefinition[];
   rolePermissions: Record<RoleKey, PermissionKey[]>;
+  roleModulePermissions?: Partial<Record<RoleKey, Partial<Record<PermissionModuleKey, PermissionLevel[]>>>>;
   properties: Property[];
   units: Unit[];
   meterReadings?: MeterReading[];

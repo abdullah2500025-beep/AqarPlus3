@@ -5,13 +5,14 @@ import {
   AlertTriangle,
   BarChart3,
   Building2,
+  Camera,
   Calendar,
   CheckCircle2,
   CheckSquare,
-  ChevronLeft,
-  ChevronRight,
   Clock,
-  Download,
+  Copy,
+  Edit3,
+  ExternalLink,
   FileSpreadsheet,
   Filter,
   GitMerge,
@@ -20,11 +21,14 @@ import {
   Laptop,
   Lock,
   LogOut,
+  Mail,
   MapPin,
+  MessageSquare,
   Plus,
   Printer,
   RefreshCw,
   Search,
+  Send,
   Settings,
   Shield,
   ShieldAlert,
@@ -32,10 +36,10 @@ import {
   Smartphone,
   Sparkles,
   Star,
+  Trash2,
   UserCheck,
   UserPlus,
   Users,
-  X,
   XCircle,
 } from 'lucide-react';
 import {
@@ -52,6 +56,11 @@ import {
 } from 'recharts';
 import { useAqar } from '../context/AqarContext';
 import {
+  AccountStatus,
+  CustomRoleDefinition,
+  EmployeeInviteChannel,
+  EmployeeInviteStatus,
+  EmployeeInvitation,
   PermissionKey,
   PermissionLevel,
   PermissionModuleKey,
@@ -64,125 +73,61 @@ import {
   TaskItem,
   TaskStatus,
 } from '../types/aqar';
-import { formatDateTime, formatSar } from '../utils/formatters';
+import { formatDateTime, formatDisplayDate, formatSar } from '../utils/formatters';
 import { triggerHaptic } from '../utils/haptics';
+import {
+  getDefaultModulePermissionsForRole,
+  getEffectiveModulePermissions,
+  RBAC_ACTIONS,
+  RBAC_MODULES,
+  ROLE_TEMPLATES,
+} from '../utils/rbac';
 import { CreateTaskQuickModal } from './CreateTaskQuickModal';
+import { UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 
-type WorkforceTab = 'members' | 'tasks' | 'performance' | 'rbac' | 'audit' | 'security';
+type WorkforceTab = 'members' | 'invitations' | 'tasks' | 'performance' | 'rbac' | 'audit' | 'security';
 type MemberDetailTab = 'performance' | 'tasks' | 'activity' | 'permissions' | 'settings';
 
-const ROLE_CATALOG: {
-  key: RoleKey;
-  labelAr: string;
-  labelEn: string;
-  tierAr: string;
-  descAr: string;
-  defaultLimitSar: number;
-}[] = [
-  {
-    key: 'sys_owner',
-    labelAr: 'مالك النظام',
-    labelEn: 'System Owner',
-    tierAr: 'تحكم كامل',
-    descAr: 'التحكم الكامل بالمنشأة، إدارة الحسابات والأمان، والنسخ الاحتياطي',
-    defaultLimitSar: 9999999,
-  },
-  {
-    key: 'gm',
-    labelAr: 'مدير الشركة',
-    labelEn: 'Company Manager',
-    tierAr: 'مرتفع',
-    descAr: 'الإشراف العام، التقارير المالية، واعتماد المصروفات الكبرى والقرارات',
-    defaultLimitSar: 500000,
-  },
-  {
-    key: 'supervisor',
-    labelAr: 'المشرف العقاري',
-    labelEn: 'Property Supervisor',
-    tierAr: 'متوسط-مرتفع',
-    descAr: 'إدارة العقارات والوحدات، متابعة الإشغال ومحاضر الاستلام والإخلاء',
-    defaultLimitSar: 25000,
-  },
-  {
-    key: 'accountant',
-    labelAr: 'المحاسب',
-    labelEn: 'Accountant',
-    tierAr: 'مالي فقط',
-    descAr: 'التحصيل، سندات القبض، المصروفات، القيود المحاسبية وتقارير الملاك',
-    defaultLimitSar: 50000,
-  },
-  {
-    key: 'leasing',
-    labelAr: 'موظف التأجير',
-    labelEn: 'Leasing Agent',
-    tierAr: 'متوسط',
-    descAr: 'تسجيل المستأجرين، إبرام العقود، التوثيق في إيجار ومتابعة المتأخرات',
-    defaultLimitSar: 0,
-  },
-  {
-    key: 'maint_manager',
-    labelAr: 'مسؤول الصيانة',
-    labelEn: 'Maintenance Manager',
-    tierAr: 'تشغيلي',
-    descAr: 'استقبال بلاغات الصيانة، إسناد المهام للفنيين، وإدارة الموردين',
-    defaultLimitSar: 15000,
-  },
-  {
-    key: 'technician',
-    labelAr: 'فني الصيانة',
-    labelEn: 'Technician',
-    tierAr: 'محدود',
-    descAr: 'تنفيذ المهام الميدانية المسندة ورفع التقارير والتشخيص والصور',
-    defaultLimitSar: 0,
-  },
-  {
-    key: 'receptionist',
-    labelAr: 'موظف الاستقبال',
-    labelEn: 'Receptionist',
-    tierAr: 'أساسي',
-    descAr: 'تسجيل البيانات الأولية للعملاء، رفع المستندات، وتوجيه البلاغات',
-    defaultLimitSar: 0,
-  },
-  {
-    key: 'auditor',
-    labelAr: 'المراجع',
-    labelEn: 'Auditor',
-    tierAr: 'للقراءة فقط',
-    descAr: 'الاطلاع الكامل على السجلات المالية والتشغيلية وسجل التدقيق دون تعديل',
-    defaultLimitSar: 0,
-  },
-  {
-    key: 'owner',
-    labelAr: 'بوابة المالك',
-    labelEn: 'Owner Portal',
-    tierAr: 'محفظة المالك',
-    descAr: 'متابعة عوائد وإشغال العقارات المملوكة ومستندات التسوية فقط',
-    defaultLimitSar: 0,
-  },
-];
+function readAvatarCompressed(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('تعذر قراءة الصورة'));
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 280;
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(result);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.onerror = () => resolve(result);
+      img.src = result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
-const MODULE_META: { key: PermissionModuleKey; labelAr: string }[] = [
-  { key: 'properties', labelAr: 'العقارات والوحدات' },
-  { key: 'tenants', labelAr: 'المستأجرين' },
-  { key: 'contracts', labelAr: 'العقود وإيجار' },
-  { key: 'finance', labelAr: 'التحصيل والإيصالات' },
-  { key: 'expenses', labelAr: 'المصروفات والموافقات' },
-  { key: 'maintenance', labelAr: 'بلاغات الصيانة' },
-  { key: 'tasks', labelAr: 'المهام والتوزيع' },
-  { key: 'documents', labelAr: 'خزنة المستندات' },
-  { key: 'archive', labelAr: 'الأرشيف الذكي' },
-  { key: 'team', labelAr: 'إدارة الفريق' },
-  { key: 'audit', labelAr: 'سجل التدقيق' },
-  { key: 'backups', labelAr: 'النسخ الاحتياطي' },
-];
+const ROLE_CATALOG = ROLE_TEMPLATES;
+const MODULE_META = RBAC_MODULES;
+const LEVEL_META = RBAC_ACTIONS;
 
-const LEVEL_META: { key: PermissionLevel; labelAr: string }[] = [
-  { key: 'view', labelAr: 'مشاهدة' },
-  { key: 'create', labelAr: 'إضافة' },
-  { key: 'edit', labelAr: 'تعديل' },
-  { key: 'delete_void', labelAr: 'حذف / إلغاء' },
-  { key: 'approve', labelAr: 'اعتماد' },
-];
+const CHANNEL_LABELS: Record<EmployeeInviteChannel, { labelAr: string; labelEn: string }> = {
+  whatsapp: { labelAr: 'واتساب', labelEn: 'WhatsApp' },
+  email: { labelAr: 'البريد الإلكتروني', labelEn: 'Email' },
+  sms: { labelAr: 'رسالة نصية SMS', labelEn: 'SMS' },
+  copy_link: { labelAr: 'نسخ رابط الدعوة', labelEn: 'Copy Link' },
+};
 
 const PERMISSION_KEYS_LIST: { key: PermissionKey; labelAr: string }[] = [
   { key: 'view_all', labelAr: 'عرض شامل للمحفظة' },
@@ -205,119 +150,129 @@ const PERMISSION_KEYS_LIST: { key: PermissionKey; labelAr: string }[] = [
 ];
 
 function buildDefaultModulePerms(role: RoleKey): Partial<Record<PermissionModuleKey, PermissionLevel[]>> {
-  if (role === 'sys_owner' || role === 'gm') {
-    const full: PermissionLevel[] = ['view', 'create', 'edit', 'delete_void', 'approve'];
-    return Object.fromEntries(MODULE_META.map((m) => [m.key, [...full]]));
-  }
-  if (role === 'auditor') {
-    return Object.fromEntries(MODULE_META.map((m) => [m.key, ['view']]));
-  }
-  if (role === 'accountant') {
-    return {
-      properties: ['view'],
-      tenants: ['view'],
-      contracts: ['view'],
-      finance: ['view', 'create', 'edit', 'delete_void', 'approve'],
-      expenses: ['view', 'create', 'edit'],
-      documents: ['view', 'create'],
-      archive: ['view'],
-    };
-  }
-  if (role === 'supervisor') {
-    return {
-      properties: ['view', 'create', 'edit'],
-      tenants: ['view', 'create', 'edit'],
-      contracts: ['view', 'create', 'edit', 'approve'],
-      maintenance: ['view', 'create', 'edit', 'approve'],
-      tasks: ['view', 'create', 'edit', 'approve'],
-      expenses: ['view', 'create', 'approve'],
-      documents: ['view', 'create'],
-      archive: ['view', 'create'],
-    };
-  }
-  if (role === 'leasing') {
-    return {
-      properties: ['view'],
-      tenants: ['view', 'create', 'edit'],
-      contracts: ['view', 'create', 'edit'],
-      tasks: ['view', 'create'],
-      documents: ['view', 'create'],
-      archive: ['view'],
-    };
-  }
-  if (role === 'maint_manager') {
-    return {
-      properties: ['view'],
-      maintenance: ['view', 'create', 'edit', 'approve'],
-      tasks: ['view', 'create', 'edit', 'approve'],
-      expenses: ['view', 'create'],
-      documents: ['view', 'create'],
-    };
-  }
-  if (role === 'technician') {
-    return {
-      properties: ['view'],
-      maintenance: ['view', 'edit'],
-      tasks: ['view', 'edit'],
-      documents: ['view', 'create'],
-    };
-  }
-  if (role === 'receptionist') {
-    return {
-      properties: ['view'],
-      tenants: ['view', 'create'],
-      maintenance: ['view', 'create'],
-      tasks: ['view', 'create'],
-      documents: ['view', 'create'],
-    };
-  }
-  return { properties: ['view'], finance: ['view'], contracts: ['view'] };
+  return getDefaultModulePermissionsForRole(role);
 }
 
 const CHART_COLORS = ['#26478D', '#10B981', '#F59E0B', '#6366F1', '#EC4899'];
 
+interface InviteDispatchState {
+  fullName: string;
+  roleLabelAr: string;
+  channel: EmployeeInviteChannel;
+  inviteUrl: string;
+  verificationCode: string;
+  handoffUrl: string;
+  externalGatewayConfigured: boolean;
+  deliveryNotice: string;
+}
+
 export function TeamWorkforceView() {
-  const { state, currentUser, lang, hasPermission, mutate, pushToast, presence } = useAqar();
+  const { state, currentUser, lang, hasPermission, mutate, apiFetch, refreshState, pushToast, presence } = useAqar();
 
   const [activeTab, setActiveTab] = useState<WorkforceTab>('members');
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<RoleKey | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<StaffStatusState | 'all'>('all');
+  const [accountStatusFilter, setAccountStatusFilter] = useState<AccountStatus | 'all'>('all');
   const [showSkeletonPreview, setShowSkeletonPreview] = useState(false);
 
   // Employee Hero Detail Drawer
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<MemberDetailTab>('performance');
 
-  // Add Employee 5-Step Wizard Modal
+  // Add Employee + Invite Modal
   const [showAddWizard, setShowAddWizard] = useState(false);
-  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [wizardSubmitting, setWizardSubmitting] = useState(false);
   const [wizardForm, setWizardForm] = useState<{
     nameAr: string;
     nameEn: string;
+    jobTitle: string;
+    department: string;
     email: string;
     phone: string;
-    specialty: string;
+    secondaryPhone: string;
+    username: string;
     role: RoleKey;
+    customRoleId: string;
     approvalLimitSar: number;
     allowedPropertyIds: string[];
     customModulePermissions: Partial<Record<PermissionModuleKey, PermissionLevel[]>>;
-    twoFactorEnabled: boolean;
-    biometricEnabled: boolean;
+    useCustomPermsOverride: boolean;
+    avatarDataUrl: string;
+    channel: EmployeeInviteChannel;
   }>({
     nameAr: '',
     nameEn: '',
+    jobTitle: '',
+    department: 'التأجير والعمليات',
     email: '',
     phone: '',
-    specialty: '',
+    secondaryPhone: '',
+    username: '',
     role: 'leasing',
+    customRoleId: '',
     approvalLimitSar: 0,
     allowedPropertyIds: [],
     customModulePermissions: buildDefaultModulePerms('leasing'),
-    twoFactorEnabled: true,
-    biometricEnabled: true,
+    useCustomPermsOverride: false,
+    avatarDataUrl: '',
+    channel: 'whatsapp',
   });
+
+  // Invite Dispatch Modal (post-create or post-resend)
+  const [inviteDispatch, setInviteDispatch] = useState<InviteDispatchState | null>(null);
+
+  // Invitations tab filters & actions
+  const [inviteSearch, setInviteSearch] = useState('');
+  const [inviteStatusFilter, setInviteStatusFilter] = useState<EmployeeInviteStatus | 'all'>('all');
+  const [resendChannelMap, setResendChannelMap] = useState<Record<string, EmployeeInviteChannel>>({});
+  const [cancelInviteConfirmId, setCancelInviteConfirmId] = useState<string | null>(null);
+  const [inviteActionBusyId, setInviteActionBusyId] = useState<string | null>(null);
+
+  // Edit Employee Admin Profile & Lifecycle inside Drawer
+  const [editEmpForm, setEditEmpForm] = useState<{
+    userId: string;
+    nameAr: string;
+    nameEn: string;
+    jobTitle: string;
+    department: string;
+    phone: string;
+    secondaryPhone: string;
+    email: string;
+    username: string;
+    role: RoleKey;
+    customRoleId: string;
+    approvalLimitSar: number;
+  } | null>(null);
+  const [savingEmpEdit, setSavingEmpEdit] = useState(false);
+  const [lifecycleConfirm, setLifecycleConfirm] = useState<{
+    userId: string;
+    nameAr: string;
+    targetStatus: AccountStatus;
+    reason: string;
+  } | null>(null);
+
+  // Custom Roles & 18x7 Module Matrix in RBAC Tab
+  const [matrixRole, setMatrixRole] = useState<RoleKey>('leasing');
+  const [matrixDraft, setMatrixDraft] = useState<Partial<Record<PermissionModuleKey, PermissionLevel[]>> | null>(null);
+  const [savingMatrix, setSavingMatrix] = useState(false);
+  const [showCustomRoleModal, setShowCustomRoleModal] = useState(false);
+  const [editingCustomRole, setEditingCustomRole] = useState<CustomRoleDefinition | null>(null);
+  const [customRoleForm, setCustomRoleForm] = useState<{
+    nameAr: string;
+    nameEn: string;
+    descriptionAr: string;
+    baseRole: RoleKey;
+    modulePermissions: Partial<Record<PermissionModuleKey, PermissionLevel[]>>;
+  }>({
+    nameAr: '',
+    nameEn: '',
+    descriptionAr: '',
+    baseRole: 'leasing',
+    modulePermissions: buildDefaultModulePerms('leasing'),
+  });
+  const [savingCustomRole, setSavingCustomRole] = useState(false);
+  const [confirmDeleteRoleId, setConfirmDeleteRoleId] = useState<string | null>(null);
 
   // Tasks sub-tab states
   const [taskViewMode, setTaskViewMode] = useState<'kanban' | 'calendar'>('kanban');
@@ -347,6 +302,17 @@ export function TeamWorkforceView() {
   const tasks = state?.tasks || [];
   const auditLogs = state?.auditLogs || [];
   const properties = state?.properties || [];
+  const invitations = state?.employeeInvitations || [];
+  const customRoles = state?.customRoles || [];
+
+  useEscapeKey(showAddWizard, () => setShowAddWizard(false));
+  useEscapeKey(Boolean(inviteDispatch), () => setInviteDispatch(null));
+  useEscapeKey(Boolean(cancelInviteConfirmId), () => setCancelInviteConfirmId(null));
+  useEscapeKey(Boolean(lifecycleConfirm), () => setLifecycleConfirm(null));
+  useEscapeKey(showCustomRoleModal, () => setShowCustomRoleModal(false));
+  useEscapeKey(Boolean(confirmDeleteRoleId), () => setConfirmDeleteRoleId(null));
+  useEscapeKey(Boolean(selectedUserId), () => setSelectedUserId(null));
+  useEscapeKey(Boolean(selectedTaskId), () => setSelectedTaskId(null));
 
   const liveOnlineUserIds = useMemo(() => new Set(presence.map((p) => p.userId)), [presence]);
 
@@ -382,17 +348,31 @@ export function TeamWorkforceView() {
     const q = searchQuery.trim().toLowerCase();
     return users.filter((u) => {
       if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+      const acctStatus: AccountStatus = u.accountStatus || (u.active ? 'نشط' : 'موقوف');
+      if (accountStatusFilter !== 'all' && acctStatus !== accountStatusFilter) return false;
       const effectiveStatus: StaffStatusState = liveOnlineUserIds.has(u.id)
         ? 'متصل'
         : u.statusState || (u.active ? 'غير متصل' : 'غير متصل');
       if (statusFilter !== 'all' && effectiveStatus !== statusFilter) return false;
       if (q) {
-        const hay = `${u.nameAr} ${u.nameEn} ${u.roleLabelAr} ${u.specialty || ''} ${u.email} ${u.phone}`.toLowerCase();
+        const hay = `${u.nameAr} ${u.nameEn} ${u.username || ''} ${u.jobTitle || ''} ${u.department || ''} ${u.roleLabelAr} ${u.specialty || ''} ${u.email} ${u.phone} ${u.secondaryPhone || ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [users, roleFilter, statusFilter, searchQuery, liveOnlineUserIds]);
+  }, [users, roleFilter, accountStatusFilter, statusFilter, searchQuery, liveOnlineUserIds]);
+
+  const filteredInvitations = useMemo(() => {
+    const q = inviteSearch.trim().toLowerCase();
+    return invitations.filter((inv) => {
+      if (inviteStatusFilter !== 'all' && inv.status !== inviteStatusFilter) return false;
+      if (q) {
+        const hay = `${inv.fullName} ${inv.email} ${inv.phone} ${inv.roleLabelAr} ${inv.jobTitle || ''} ${inv.department || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [invitations, inviteSearch, inviteStatusFilter]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {
@@ -529,14 +509,29 @@ export function TeamWorkforceView() {
     return 'text-slate-500 dark:text-slate-400';
   };
 
-  // Handlers
   const handleWizardRoleChange = (role: RoleKey) => {
     const meta = ROLE_CATALOG.find((r) => r.key === role);
     setWizardForm((prev) => ({
       ...prev,
       role,
+      customRoleId: '',
       approvalLimitSar: meta?.defaultLimitSar ?? 0,
       customModulePermissions: buildDefaultModulePerms(role),
+    }));
+  };
+
+  const handleWizardCustomRoleChange = (customRoleId: string) => {
+    if (!customRoleId) {
+      setWizardForm((prev) => ({ ...prev, customRoleId: '' }));
+      return;
+    }
+    const found = customRoles.find((r) => r.id === customRoleId);
+    if (!found) return;
+    setWizardForm((prev) => ({
+      ...prev,
+      customRoleId,
+      role: found.baseRoleKey,
+      customModulePermissions: { ...found.modulePermissions },
     }));
   };
 
@@ -546,62 +541,326 @@ export function TeamWorkforceView() {
       const next = existing.includes(lvl) ? existing.filter((x) => x !== lvl) : [...existing, lvl];
       return {
         ...prev,
+        useCustomPermsOverride: true,
         customModulePermissions: { ...prev.customModulePermissions, [mod]: next },
       };
     });
   };
 
-  const handleSubmitNewEmployee = async () => {
-    if (!wizardForm.nameAr.trim() || !wizardForm.phone.trim()) {
-      pushToast('error', 'الاسم الكامل ورقم الجوال مطلوبان');
+  const handleWizardAvatarPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      pushToast('error', 'يرجى اختيار ملف صورة صالح');
+      return;
+    }
+    try {
+      const dataUrl = await readAvatarCompressed(file);
+      setWizardForm((prev) => ({ ...prev, avatarDataUrl: dataUrl }));
+    } catch {
+      pushToast('error', 'تعذر قراءة الصورة');
+    }
+  };
+
+  const handleSubmitNewEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!wizardForm.nameAr.trim() || !wizardForm.phone.trim() || !wizardForm.email.trim()) {
+      pushToast('error', 'الاسم الكامل، رقم الجوال الأساسي، والبريد الإلكتروني حقول مطلوبة');
       return;
     }
     setWizardSubmitting(true);
     triggerHaptic('medium');
     try {
-      const roleMeta = ROLE_CATALOG.find((r) => r.key === wizardForm.role)!;
-      const res = await mutate<{ user?: StaffUser }>(
-        'POST',
-        '/api/team/users',
-        {
-          nameAr: wizardForm.nameAr,
-          nameEn: wizardForm.nameEn || wizardForm.nameAr,
-          email: wizardForm.email,
-          phone: wizardForm.phone,
+      const res = await apiFetch('/api/team/employees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nameAr: wizardForm.nameAr.trim(),
+          nameEn: (wizardForm.nameEn || wizardForm.nameAr).trim(),
+          jobTitle: wizardForm.jobTitle.trim() || undefined,
+          department: wizardForm.department.trim() || undefined,
+          email: wizardForm.email.trim(),
+          phone: wizardForm.phone.trim(),
+          secondaryPhone: wizardForm.secondaryPhone.trim() || undefined,
+          username: wizardForm.username.trim() || undefined,
           role: wizardForm.role,
-          roleLabelAr: roleMeta.labelAr,
-          roleLabelEn: roleMeta.labelEn,
-          specialty: wizardForm.specialty || roleMeta.labelAr,
-          approvalLimitSar: wizardForm.approvalLimitSar,
+          customRoleId: wizardForm.customRoleId || undefined,
+          approvalLimitSar: Number(wizardForm.approvalLimitSar || 0),
           allowedPropertyIds: wizardForm.allowedPropertyIds,
-          customModulePermissions: wizardForm.customModulePermissions,
-          twoFactorEnabled: wizardForm.twoFactorEnabled,
-          biometricEnabled: wizardForm.biometricEnabled,
-        },
-        { offlineDescAr: `إضافة الموظف ${wizardForm.nameAr}` }
-      );
-      if (res) {
-        triggerHaptic('success');
-        pushToast('success', `تمت إضافة ${wizardForm.nameAr} (${roleMeta.labelAr}) وتفعيل الصلاحيات بنجاح`);
-        setShowAddWizard(false);
-        setWizardStep(1);
-        setWizardForm({
-          nameAr: '',
-          nameEn: '',
-          email: '',
-          phone: '',
-          specialty: '',
-          role: 'leasing',
-          approvalLimitSar: 0,
-          allowedPropertyIds: [],
-          customModulePermissions: buildDefaultModulePerms('leasing'),
-          twoFactorEnabled: true,
-          biometricEnabled: true,
-        });
+          customModulePermissions: wizardForm.useCustomPermsOverride ? wizardForm.customModulePermissions : undefined,
+          avatarDataUrl: wizardForm.avatarDataUrl || undefined,
+          channel: wizardForm.channel,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('error', data?.error || 'تعذر إضافة الموظف وإصدار الدعوة');
+        return;
       }
+      await refreshState();
+      triggerHaptic('success');
+      setShowAddWizard(false);
+      setInviteDispatch({
+        fullName: data.user?.nameAr || wizardForm.nameAr,
+        roleLabelAr: data.user?.roleLabelAr || '',
+        channel: wizardForm.channel,
+        inviteUrl: data.inviteUrl,
+        verificationCode: data.verificationCode,
+        handoffUrl: data.handoffUrl,
+        externalGatewayConfigured: Boolean(data.externalGatewayConfigured),
+        deliveryNotice: data.deliveryNotice || '',
+      });
+      setWizardForm({
+        nameAr: '',
+        nameEn: '',
+        jobTitle: '',
+        department: 'التأجير والعمليات',
+        email: '',
+        phone: '',
+        secondaryPhone: '',
+        username: '',
+        role: 'leasing',
+        customRoleId: '',
+        approvalLimitSar: 0,
+        allowedPropertyIds: [],
+        customModulePermissions: buildDefaultModulePerms('leasing'),
+        useCustomPermsOverride: false,
+        avatarDataUrl: '',
+        channel: 'whatsapp',
+      });
+      pushToast('success', 'تم إضافة الموظف وإصدار رابط التفعيل بنجاح');
+    } catch {
+      pushToast('error', 'تعذر الاتصال بالخادم لإرسال الدعوة');
     } finally {
       setWizardSubmitting(false);
     }
+  };
+
+  const handleResendInvitation = async (inv: EmployeeInvitation) => {
+    setInviteActionBusyId(inv.id);
+    try {
+      const channel = resendChannelMap[inv.id] || inv.channel || 'copy_link';
+      const res = await apiFetch(`/api/team/invitations/${encodeURIComponent(inv.id)}/resend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('error', data?.error || 'تعذر إعادة إرسال الدعوة');
+        return;
+      }
+      await refreshState();
+      setInviteDispatch({
+        fullName: inv.fullName,
+        roleLabelAr: inv.roleLabelAr,
+        channel,
+        inviteUrl: data.inviteUrl,
+        verificationCode: data.verificationCode,
+        handoffUrl: data.handoffUrl,
+        externalGatewayConfigured: Boolean(data.externalGatewayConfigured),
+        deliveryNotice: data.deliveryNotice || '',
+      });
+      pushToast('success', `تم إصدار رابط دعوة جديد للموظف ${inv.fullName}`);
+    } finally {
+      setInviteActionBusyId(null);
+    }
+  };
+
+  const handleCancelInvitation = async (invId: string) => {
+    setInviteActionBusyId(invId);
+    try {
+      const res = await apiFetch(`/api/team/invitations/${encodeURIComponent(invId)}/cancel`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      setCancelInviteConfirmId(null);
+      if (!res.ok) {
+        pushToast('error', data?.error || 'تعذر إلغاء الدعوة');
+        return;
+      }
+      await refreshState();
+      pushToast('info', 'تم إلغاء الدعوة وإبطال رابطها فوراً');
+    } finally {
+      setInviteActionBusyId(null);
+    }
+  };
+
+  const openEditEmpForm = (u: StaffUser) => {
+    setEditEmpForm({
+      userId: u.id,
+      nameAr: u.nameAr,
+      nameEn: u.nameEn,
+      jobTitle: u.jobTitle || '',
+      department: u.department || '',
+      phone: u.phone,
+      secondaryPhone: u.secondaryPhone || '',
+      email: u.email,
+      username: u.username || '',
+      role: u.role,
+      customRoleId: u.customRoleId || '',
+      approvalLimitSar: u.approvalLimitSar || 0,
+    });
+  };
+
+  const handleSaveEmployeeAdminEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editEmpForm) return;
+    setSavingEmpEdit(true);
+    try {
+      const targetUser = users.find((u) => u.id === editEmpForm.userId);
+      const isSelf = targetUser?.id === currentUser.id;
+      const bodyPayload: Record<string, unknown> = {
+        nameAr: editEmpForm.nameAr.trim(),
+        nameEn: editEmpForm.nameEn.trim() || editEmpForm.nameAr.trim(),
+        jobTitle: editEmpForm.jobTitle.trim(),
+        department: editEmpForm.department.trim(),
+        phone: editEmpForm.phone.trim(),
+        secondaryPhone: editEmpForm.secondaryPhone.trim(),
+        email: editEmpForm.email.trim(),
+        username: editEmpForm.username.trim(),
+      };
+      if (!isSelf && targetUser && canModifyTargetPermissions(targetUser)) {
+        bodyPayload.role = editEmpForm.role;
+        bodyPayload.customRoleId = editEmpForm.customRoleId || null;
+        bodyPayload.approvalLimitSar = Number(editEmpForm.approvalLimitSar || 0);
+      }
+      const res = await apiFetch(`/api/team/employees/${encodeURIComponent(editEmpForm.userId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bodyPayload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('error', data?.error || 'تعذر حفظ تعديلات الموظف');
+        return;
+      }
+      await refreshState();
+      setEditEmpForm(null);
+      pushToast('success', 'تم تحديث بيانات الموظف بنجاح');
+    } finally {
+      setSavingEmpEdit(false);
+    }
+  };
+
+  const handleConfirmLifecycleChange = async () => {
+    if (!lifecycleConfirm) return;
+    const res = await apiFetch(`/api/team/employees/${encodeURIComponent(lifecycleConfirm.userId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountStatus: lifecycleConfirm.targetStatus,
+        terminationReason: lifecycleConfirm.reason.trim() || undefined,
+      }),
+    });
+    const data = await res.json();
+    setLifecycleConfirm(null);
+    if (!res.ok) {
+      pushToast('error', data?.error || 'تعذر تغيير حالة الحساب');
+      return;
+    }
+    await refreshState();
+    pushToast('success', `تم تغيير حالة الحساب إلى «${data.user?.accountStatus || lifecycleConfirm.targetStatus}»`);
+  };
+
+  const handleCopyText = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      pushToast('success', `تم نسخ ${label}`);
+    } catch {
+      pushToast('info', 'حدد النص وانسخه يدوياً');
+    }
+  };
+
+  const handleSaveRoleModuleMatrix = async () => {
+    if (!matrixDraft) return;
+    setSavingMatrix(true);
+    try {
+      const res = await apiFetch('/api/roles/module-matrix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role: matrixRole,
+          modulePermissions: matrixDraft,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('error', data?.error || 'تعذر حفظ مصفوفة الصلاحيات');
+        return;
+      }
+      await refreshState();
+      setMatrixDraft(null);
+      pushToast('success', 'تم حفظ وتفعيل مصفوفة الصلاحيات التفصيلية للدور');
+    } finally {
+      setSavingMatrix(false);
+    }
+  };
+
+  const openNewCustomRoleModal = () => {
+    setEditingCustomRole(null);
+    setCustomRoleForm({
+      nameAr: '',
+      nameEn: '',
+      descriptionAr: '',
+      baseRole: 'leasing',
+      modulePermissions: buildDefaultModulePerms('leasing'),
+    });
+    setShowCustomRoleModal(true);
+  };
+
+  const openEditCustomRoleModal = (roleDef: CustomRoleDefinition) => {
+    setEditingCustomRole(roleDef);
+    setCustomRoleForm({
+      nameAr: roleDef.nameAr,
+      nameEn: roleDef.nameEn,
+      descriptionAr: roleDef.descriptionAr || '',
+      baseRole: roleDef.baseRoleKey,
+      modulePermissions: { ...roleDef.modulePermissions },
+    });
+    setShowCustomRoleModal(true);
+  };
+
+  const handleSaveCustomRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customRoleForm.nameAr.trim()) {
+      pushToast('error', 'يرجى إدخال اسم الدور الوظيفي');
+      return;
+    }
+    setSavingCustomRole(true);
+    try {
+      const url = editingCustomRole ? `/api/roles/${encodeURIComponent(editingCustomRole.id)}` : '/api/roles';
+      const method = editingCustomRole ? 'PATCH' : 'POST';
+      const res = await apiFetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customRoleForm),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('error', data?.error || 'تعذر حفظ الدور المخصص');
+        return;
+      }
+      await refreshState();
+      setShowCustomRoleModal(false);
+      pushToast('success', editingCustomRole ? 'تم تحديث الدور المخصص' : 'تم إنشاء الدور الوظيفي المخصص');
+    } finally {
+      setSavingCustomRole(false);
+    }
+  };
+
+  const handleDeleteCustomRole = async (roleId: string) => {
+    const res = await apiFetch(`/api/roles/${encodeURIComponent(roleId)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    setConfirmDeleteRoleId(null);
+    if (!res.ok) {
+      pushToast('error', data?.error || 'تعذر حذف الدور المخصص');
+      return;
+    }
+    await refreshState();
+    pushToast('info', 'تم حذف الدور الوظيفي المخصص');
   };
 
   const handleUpdateUserPatch = async (
@@ -632,22 +891,40 @@ export function TeamWorkforceView() {
     mod: PermissionModuleKey,
     lvl: PermissionLevel
   ) => {
-    const base = user.customModulePermissions || buildDefaultModulePerms(user.role);
+    const base = getEffectiveModulePermissions(state, user);
     const curr = base[mod] || [];
     const next = curr.includes(lvl) ? curr.filter((x) => x !== lvl) : [...curr, lvl];
-    await handleUpdateUserPatch(
-      user.id,
-      { customModulePermissions: { ...base, [mod]: next } },
-      'تم تحديث صلاحية الوحدة للموظف'
-    );
+    const nextMap = { ...base, [mod]: next };
+    const res = await apiFetch(`/api/team/employees/${encodeURIComponent(user.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customModulePermissions: nextMap }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      pushToast('error', data?.error || 'تعذر تحديث صلاحية الموظف');
+      return;
+    }
+    await refreshState();
+    pushToast('success', 'تم تحديث صلاحية القسم للموظف فوراً');
   };
 
   const handleToggleUserPropertyScope = async (user: StaffUser, propId: string) => {
     const current = user.allowedPropertyIds || [];
     const next = current.includes(propId) ? current.filter((id) => id !== propId) : [...current, propId];
-    await handleUpdateUserPatch(
-      user.id,
-      { allowedPropertyIds: next },
+    const res = await apiFetch(`/api/team/employees/${encodeURIComponent(user.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ allowedPropertyIds: next }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      pushToast('error', data?.error || 'تعذر تحديث نطاق العقارات');
+      return;
+    }
+    await refreshState();
+    pushToast(
+      'success',
       next.length > 0 ? `تم تقييد صلاحية العقارات (${next.length} عقار)` : 'تم فتح الصلاحية لجميع العقارات'
     );
   };
@@ -852,42 +1129,38 @@ export function TeamWorkforceView() {
               <button
                 type="button"
                 onClick={() => setShowCreateTaskModal(true)}
-                className="min-h-[40px] px-3.5 py-2 rounded-xl border border-[#26478D]/30 bg-[#26478D]/10 dark:bg-blue-500/15 text-[#26478D] dark:text-blue-300 text-xs font-semibold inline-flex items-center gap-1.5 hover:bg-[#26478D]/20 cursor-pointer"
+                className="min-h-[40px] px-3.5 py-2 rounded-xl border border-[#26478D]/30 bg-[#26478D]/10 dark:bg-blue-500/15 text-[#26478D] dark:text-blue-300 text-xs font-semibold inline-flex items-center gap-1.5 hover:bg-[#26478D]/20 cursor-pointer whitespace-nowrap shrink-0"
               >
-                <CheckSquare className="w-3.5 h-3.5" />
+                <CheckSquare className="w-3.5 h-3.5 shrink-0" />
                 <span>{lang === 'ar' ? 'إنشاء مهمة ذكية' : 'Create Smart Task'}</span>
               </button>
             )}
-            {isSysOwner ? (
+            {canManageTeam && (
               <button
                 type="button"
-                onClick={() => {
-                  setWizardStep(1);
-                  setShowAddWizard(true);
-                }}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#26478D] hover:bg-[#1e3a75] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                onClick={() => setShowAddWizard(true)}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#26478D] hover:bg-[#1e3a75] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
               >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>{lang === 'ar' ? 'إضافة موظف جديد' : 'Add Employee'}</span>
+                <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                <span>{lang === 'ar' ? 'إضافة موظف وإرسال دعوة' : 'Invite Employee'}</span>
               </button>
-            ) : (
-              isCompanyManager && (
-                <span className="text-[11px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 text-slate-500 dark:text-slate-400">
-                  إنشاء وحذف المستخدمين حصري لمالك النظام · يمكنك تعديل صلاحيات الموظفين التابعين لك
-                </span>
-              )
             )}
           </div>
         </div>
 
-        {/* 6 Segmented Sub-Tabs */}
+        {/* 7 Segmented Sub-Tabs */}
         <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-200/70 dark:bg-white/[0.05] overflow-x-auto no-print">
           {(
             [
               { id: 'members', labelAr: `الفريق (${users.length})`, icon: Users },
+              {
+                id: 'invitations',
+                labelAr: `الدعوات (${invitations.filter((i) => i.status === 'بانتظار التفعيل').length}/${invitations.length})`,
+                icon: Send,
+              },
               { id: 'tasks', labelAr: `المهام الذكية (${filteredTasks.length})`, icon: Kanban },
               { id: 'performance', labelAr: 'الأداء والتقارير', icon: BarChart3 },
-              { id: 'rbac', labelAr: 'الأدوار والصلاحيات', icon: Shield },
+              { id: 'rbac', labelAr: 'الأدوار والصلاحيات (18×7)', icon: Shield },
               { id: 'audit', labelAr: `سجل التدقيق (${auditLogs.length})`, icon: Activity },
               {
                 id: 'security',
@@ -906,13 +1179,13 @@ export function TeamWorkforceView() {
                   triggerHaptic('light');
                   setActiveTab(t.id);
                 }}
-                className={`shrink-0 min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
+                className={`shrink-0 whitespace-nowrap min-h-[38px] px-3.5 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer transition-colors ${
                   active
                     ? 'bg-white dark:bg-[#26478D] text-slate-900 dark:text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-300 hover:bg-white/60 dark:hover:bg-white/[0.06]'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
+                <Icon className="w-3.5 h-3.5 shrink-0" />
                 <span>{t.labelAr}</span>
               </button>
             );
@@ -926,12 +1199,12 @@ export function TeamWorkforceView() {
           {/* Quick KPI Strip */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">إجمالي الكادر النشط</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">الكادر النشط بالشركة</div>
               <div className="text-2xl font-bold font-mono-num mt-1">
-                {users.filter((u) => u.active).length} / {users.length}
+                {users.filter((u) => u.active && (!u.accountStatus || u.accountStatus === 'نشط')).length} / {users.length}
               </div>
               <div className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5 font-mono-num">
-                {liveOnlineUserIds.size} متصلون الآن عبر البث المباشر
+                {liveOnlineUserIds.size} متصلون الآن · {users.filter((u) => u.accountStatus === 'بانتظار التفعيل').length} بانتظار التفعيل
               </div>
             </div>
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
@@ -944,11 +1217,11 @@ export function TeamWorkforceView() {
               </div>
             </div>
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">المصادقة الثنائية 2FA مفعّلة</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">الأدوار المخصصة</div>
               <div className="text-2xl font-bold font-mono-num mt-1">
-                {users.filter((u) => u.security?.twoFactorEnabled).length} موظف
+                {customRoles.length}
               </div>
-              <div className="text-[11px] text-slate-500 mt-0.5">حماية الحسابات الحساسة</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">بجانب {ROLE_CATALOG.length} قوالب قياسية</div>
             </div>
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface">
               <div className="text-[11px] text-slate-500 dark:text-slate-400">متوسط تقييم الأداء</div>
@@ -962,12 +1235,12 @@ export function TeamWorkforceView() {
           {/* Search & Filters Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[260px]">
-              <div className="relative flex-1 max-w-sm">
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
                 <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3" />
                 <input
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="ابحث بالاسم، الدور، التخصص، أو البريد..."
+                  placeholder="ابحث بالاسم، اسم المستخدم، المسمى، القسم، الجوال..."
                   className="w-full min-h-[40px] ps-9 pe-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] text-xs"
                 />
               </div>
@@ -984,11 +1257,23 @@ export function TeamWorkforceView() {
                 ))}
               </select>
               <select
+                value={accountStatusFilter}
+                onChange={(e) => setAccountStatusFilter(e.target.value as AccountStatus | 'all')}
+                className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] text-xs"
+              >
+                <option value="all">كل حالات الحساب</option>
+                <option value="نشط">نشط</option>
+                <option value="بانتظار التفعيل">بانتظار التفعيل</option>
+                <option value="موقوف">موقوف</option>
+                <option value="مرفوض">مرفوض</option>
+                <option value="منتهي الوصول">منتهي الوصول</option>
+              </select>
+              <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as StaffStatusState | 'all')}
                 className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] text-xs"
               >
-                <option value="all">كل الحالات</option>
+                <option value="all">كل حالات الاتصال</option>
                 <option value="متصل">متصل</option>
                 <option value="مشغول">مشغول</option>
                 <option value="غير متصل">غير متصل</option>
@@ -1000,14 +1285,14 @@ export function TeamWorkforceView() {
                 setShowSkeletonPreview(true);
                 setTimeout(() => setShowSkeletonPreview(false), 320);
               }}
-              className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 text-xs font-medium inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+              className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 text-xs font-medium inline-flex items-center gap-1.5 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer whitespace-nowrap shrink-0"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>تحديث الحالة المباشرة</span>
             </button>
           </div>
 
-          {/* Employee Cards Grid (or Skeleton Shimmer) */}
+          {/* Employee Cards Grid */}
           {showSkeletonPreview ? (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {Array.from({ length: 6 }).map((_, idx) => (
@@ -1031,6 +1316,7 @@ export function TeamWorkforceView() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {filteredUsers.map((user) => {
                 const status = getUserStatus(user);
+                const acctStatus: AccountStatus = user.accountStatus || (user.active ? 'نشط' : 'موقوف');
                 const metrics = userTaskMetrics.get(user.id) || {
                   activeCount: 0,
                   completedCount: 0,
@@ -1041,6 +1327,13 @@ export function TeamWorkforceView() {
                   user.allowedPropertyIds && user.allowedPropertyIds.length > 0
                     ? `نطاق مقيد: ${user.allowedPropertyIds.length} عقارات`
                     : 'كل عقارات الشركة';
+                const acctColorClass =
+                  acctStatus === 'نشط'
+                    ? statusTextColor(status)
+                    : acctStatus === 'بانتظار التفعيل'
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : 'text-red-500 dark:text-red-400';
+
                 return (
                   <button
                     key={user.id}
@@ -1048,29 +1341,47 @@ export function TeamWorkforceView() {
                     onClick={() => {
                       triggerHaptic('light');
                       setSelectedUserId(user.id);
+                      setEditEmpForm(null);
                       setDetailTab('performance');
                     }}
                     className={`text-start p-5 rounded-2xl border glass-surface glass-card-interactive space-y-4 cursor-pointer ${
-                      user.active
+                      acctStatus === 'نشط'
                         ? 'border-slate-200 dark:border-white/10 hover:border-[#26478D]/50'
-                        : 'border-red-300/60 dark:border-red-500/30 opacity-75'
+                        : acctStatus === 'بانتظار التفعيل'
+                        ? 'border-amber-300/70 dark:border-amber-500/30'
+                        : 'border-red-300/60 dark:border-red-500/30 opacity-80'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#26478D] to-[#1A346B] text-white flex items-center justify-center font-bold text-base shrink-0">
-                          {user.nameAr.slice(0, 2)}
-                        </div>
+                        {user.avatarDataUrl ? (
+                          <img
+                            src={user.avatarDataUrl}
+                            alt={user.nameAr}
+                            className="w-12 h-12 rounded-2xl object-cover border border-slate-200 dark:border-white/15 shrink-0"
+                          />
+                        ) : (
+                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#26478D] to-[#1A346B] text-white flex items-center justify-center font-bold text-base shrink-0">
+                            {user.nameAr.slice(0, 2)}
+                          </div>
+                        )}
                         <div className="min-w-0">
                           <div className="font-bold text-sm truncate">{user.nameAr}</div>
                           <div className="text-xs text-[#26478D] dark:text-blue-400 font-semibold truncate">
                             {user.roleLabelAr}
-                            {user.specialty ? ` · ${user.specialty}` : ''}
+                            {user.jobTitle && user.jobTitle !== user.roleLabelAr ? ` · ${user.jobTitle}` : ''}
                           </div>
+                          {(user.department || user.username) && (
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                              {user.department || ''}
+                              {user.department && user.username ? ' · ' : ''}
+                              {user.username ? <span className="font-mono-num">@{user.username}</span> : ''}
+                            </div>
+                          )}
                         </div>
                       </div>
-                      <span className={`text-[11px] font-bold shrink-0 ${statusTextColor(status)}`}>
-                        {!user.active ? 'موقوف' : status}
+                      <span className={`text-[11px] font-bold shrink-0 ${acctColorClass}`}>
+                        {acctStatus === 'نشط' ? status : acctStatus}
                       </span>
                     </div>
 
@@ -1096,15 +1407,182 @@ export function TeamWorkforceView() {
                     <div className="space-y-1 text-[11px] text-slate-500 dark:text-slate-400">
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate">{scopeLabel}</span>
-                        <span className="font-mono-num shrink-0">{user.phone}</span>
+                        <span className="font-mono-num shrink-0" dir="ltr">
+                          {user.phone}
+                          {user.secondaryPhone ? ` / ${user.secondaryPhone}` : ''}
+                        </span>
                       </div>
                       <div className="truncate text-slate-600 dark:text-slate-300">
-                        آخر نشاط: {user.lastActivitySummary || 'متاح بالنظام'}
+                        {user.lastLoginAt
+                          ? `آخر دخول: ${formatDisplayDate(user.lastLoginAt)}`
+                          : user.lastActivitySummary || 'متاح بالنظام'}
                       </div>
                     </div>
                   </button>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 1B: EMPLOYEE INVITATIONS & ACTIVATION TRACKING */}
+      {activeTab === 'invitations' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2.5 flex-1">
+              <div className="relative flex-1 min-w-[200px] max-w-sm">
+                <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 start-3" />
+                <input
+                  value={inviteSearch}
+                  onChange={(e) => setInviteSearch(e.target.value)}
+                  placeholder="ابحث باسم الموظف، البريد، الجوال، الدور..."
+                  className="w-full min-h-[40px] ps-9 pe-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] text-xs"
+                />
+              </div>
+              <select
+                value={inviteStatusFilter}
+                onChange={(e) => setInviteStatusFilter(e.target.value as EmployeeInviteStatus | 'all')}
+                className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] text-xs"
+              >
+                <option value="all">كل حالات الدعوة ({invitations.length})</option>
+                <option value="بانتظار التفعيل">بانتظار التفعيل</option>
+                <option value="مقبولة">مقبولة ومفعّلة</option>
+                <option value="ملغاة">ملغاة</option>
+                <option value="منتهية">منتهية الصلاحية</option>
+              </select>
+            </div>
+            {canManageTeam && (
+              <button
+                type="button"
+                onClick={() => setShowAddWizard(true)}
+                className="min-h-[40px] px-4 py-2 rounded-xl bg-[#26478D] hover:bg-[#1e3a75] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>إرسال دعوة جديدة</span>
+              </button>
+            )}
+          </div>
+
+          {filteredInvitations.length === 0 ? (
+            <div className="p-8 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface text-center space-y-2 text-xs">
+              <Send className="w-7 h-7 text-slate-400 mx-auto" />
+              <div className="font-bold">لا توجد دعوات مطابقة للفلتر الحالي</div>
+              <p className="text-slate-500">
+                عند إضافة موظف جديد من فريق العمل، يتم إنشاء رابط دعوة لمرة واحدة مع رمز تحقق وإدراجه هنا للمتابعة أو إعادة الإرسال.
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-x-auto">
+              <table className="w-full text-start text-xs">
+                <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10">
+                  <tr>
+                    <th className="py-3 px-4 text-start">الموظف المدعو</th>
+                    <th className="py-3 px-4 text-start">الدور والمسمى</th>
+                    <th className="py-3 px-4 text-start">القناة والتوصيل</th>
+                    <th className="py-3 px-4 text-start">الحالة والصلاحية</th>
+                    <th className="py-3 px-4 text-end">إجراءات الدعوة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                  {filteredInvitations.map((inv) => {
+                    const statusColor =
+                      inv.status === 'مقبولة'
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : inv.status === 'بانتظار التفعيل'
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-red-500 dark:text-red-400';
+                    const canAct =
+                      canManageTeam && (inv.status === 'بانتظار التفعيل' || inv.status === 'منتهية');
+                    const busy = inviteActionBusyId === inv.id;
+
+                    return (
+                      <tr key={inv.id}>
+                        <td className="py-3 px-4">
+                          <div className="font-bold">{inv.fullName}</div>
+                          <div className="text-[11px] text-slate-500 font-mono-num" dir="ltr">
+                            {inv.email} · {inv.phone}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-[#26478D] dark:text-blue-400">{inv.roleLabelAr}</div>
+                          {(inv.jobTitle || inv.department) && (
+                            <div className="text-[11px] text-slate-500">
+                              {inv.jobTitle || ''}
+                              {inv.jobTitle && inv.department ? ' · ' : ''}
+                              {inv.department || ''}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-medium">
+                            {CHANNEL_LABELS[inv.channel]?.labelAr || inv.channel} ·{' '}
+                            <span className="text-slate-500">
+                              {inv.deliveryMode === 'gateway' ? 'بوابة متصلة' : 'توصيل/نسخ محلي'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono-num">
+                            أرسلت: {formatDateTime(inv.sentAt, lang)} · إرسالات: {1 + (inv.resendCount || 0)}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className={`font-bold ${statusColor}`}>{inv.status}</div>
+                          <div className="text-[11px] text-slate-500 font-mono-num">
+                            تنتهي: {formatDisplayDate(inv.expiresAt)}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center justify-end gap-2">
+                            {canAct ? (
+                              <>
+                                <select
+                                  value={resendChannelMap[inv.id] || inv.channel || 'whatsapp'}
+                                  onChange={(e) =>
+                                    setResendChannelMap((prev) => ({
+                                      ...prev,
+                                      [inv.id]: e.target.value as EmployeeInviteChannel,
+                                    }))
+                                  }
+                                  className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A] text-[11px]"
+                                >
+                                  <option value="whatsapp">واتساب</option>
+                                  <option value="email">بريد</option>
+                                  <option value="sms">SMS</option>
+                                  <option value="copy_link">نسخ</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void handleResendInvitation(inv)}
+                                  className="px-3 py-1.5 rounded-lg bg-[#26478D] text-white text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50"
+                                >
+                                  {busy ? '...' : 'إعادة إرسال'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => setCancelInviteConfirmId(inv.id)}
+                                  className="px-3 py-1.5 rounded-lg border border-red-300 dark:border-red-500/30 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50"
+                                >
+                                  إلغاء
+                                </button>
+                              </>
+                            ) : (
+                              <span className="text-[11px] text-slate-400">
+                                {inv.acceptedAt
+                                  ? `فُعّلت ${formatDisplayDate(inv.acceptedAt)}`
+                                  : inv.canceledAt
+                                  ? `ألغيت ${formatDisplayDate(inv.canceledAt)}`
+                                  : 'مؤرشفة'}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -1497,82 +1975,269 @@ export function TeamWorkforceView() {
         </div>
       )}
 
-      {/* TAB 4: 9 ROLES + GRANULAR RBAC MATRIX */}
-      {activeTab === 'rbac' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3.5">
-            {ROLE_CATALOG.map((r) => {
-              const count = users.filter((u) => u.role === r.key).length;
-              return (
-                <div
-                  key={r.key}
-                  className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-2 text-xs"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-sm">{r.labelAr}</span>
-                    <span className="font-mono-num font-bold text-[#26478D] dark:text-blue-400">{count}</span>
-                  </div>
-                  <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">{r.tierAr}</div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">{r.descAr}</p>
-                </div>
-              );
-            })}
-          </div>
+      {/* TAB 4: ROLES, CUSTOM ROLES & 18x7 GRANULAR RBAC MATRIX */}
+      {activeTab === 'rbac' && (() => {
+        const currentRoleMatrix =
+          matrixDraft ||
+          state.roleModulePermissions?.[matrixRole] ||
+          getDefaultModulePermissionsForRole(matrixRole);
+        const roleMatrixEditable = canModifyRoleColumn(matrixRole);
+        const toggleRoleMatrixCell = (modKey: PermissionModuleKey, actKey: PermissionLevel) => {
+          if (!roleMatrixEditable) return;
+          const base = { ...currentRoleMatrix };
+          const list = base[modKey] || [];
+          base[modKey] = list.includes(actKey) ? list.filter((a) => a !== actKey) : [...list, actKey];
+          setMatrixDraft(base);
+        };
+        const toggleRoleMatrixRowAll = (modKey: PermissionModuleKey) => {
+          if (!roleMatrixEditable) return;
+          const base = { ...currentRoleMatrix };
+          const list = base[modKey] || [];
+          base[modKey] = list.length === LEVEL_META.length ? [] : LEVEL_META.map((l) => l.key);
+          setMatrixDraft(base);
+        };
 
-          <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-x-auto">
-            <div className="px-5 py-4 border-b border-slate-200 dark:border-white/10 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
-                <h3 className="text-sm font-bold">مصفوفة صلاحيات الأدوار المعتمدة (تحديث فوري على الخادم)</h3>
-              </div>
-              <span className="text-[11px] text-slate-500">
-                يمكن تخصيص صلاحيات كل موظف بـ 5 مستويات أو عقارات محددة من بطاقة الموظف.
-              </span>
+        return (
+          <div className="space-y-6">
+            {/* Standard Role Templates */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3.5">
+              {ROLE_CATALOG.map((r) => {
+                const count = users.filter((u) => u.role === r.key && !u.customRoleId).length;
+                return (
+                  <div
+                    key={r.key}
+                    className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 glass-surface space-y-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-sm">{r.labelAr}</span>
+                      <span className="font-mono-num font-bold text-[#26478D] dark:text-blue-400">{count}</span>
+                    </div>
+                    <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">{r.tierAr}</div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">{r.descAr}</p>
+                  </div>
+                );
+              })}
             </div>
-            <table className="w-full text-start text-xs">
-              <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10">
-                <tr>
-                  <th className="py-2.5 px-4 text-start font-medium whitespace-nowrap">الصلاحية</th>
-                  {ROLE_CATALOG.map((r) => (
-                    <th key={r.key} className="py-2.5 px-2.5 text-center font-medium whitespace-nowrap">
-                      {r.labelAr}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-white/5">
-                {PERMISSION_KEYS_LIST.map((p) => (
-                  <tr key={p.key} className="hover:bg-slate-50/70 dark:hover:bg-white/[0.02]">
-                    <td className="py-2.5 px-4 font-medium whitespace-nowrap">{p.labelAr}</td>
-                    {ROLE_CATALOG.map((r) => {
-                      const checked = (state.rolePermissions[r.key] || []).includes(p.key);
-                      const editable = canModifyRoleColumn(r.key);
+
+            {/* Custom Roles Management */}
+            <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
+                    <span>الأدوار الوظيفية المخصصة للشركة ({customRoles.length})</span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    أنشئ أدواراً مخصصة بصلاحيات دقيقة على الأقسام والعمليات، وأسندها للموظفين عند الدعوة أو التعديل.
+                  </p>
+                </div>
+                {canManageTeam && (
+                  <button
+                    type="button"
+                    onClick={openNewCustomRoleModal}
+                    className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#26478D] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>إنشاء دور مخصص</span>
+                  </button>
+                )}
+              </div>
+
+              {customRoles.length === 0 ? (
+                <div className="text-xs text-slate-500 py-3">
+                  لا توجد أدوار مخصصة بعد — يمكنك إنشاء دور جديد مثلاً «مسؤول تحصيل المنطقة الشمالية».
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 text-xs">
+                  {customRoles.map((cr) => {
+                    const assignedCount = users.filter((u) => u.customRoleId === cr.id).length;
+                    return (
+                      <div
+                        key={cr.id}
+                        className="p-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.02] space-y-2.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="font-bold text-sm">{cr.nameAr}</div>
+                            <div className="text-[11px] text-slate-500">
+                              مبني على: {ROLE_CATALOG.find((t) => t.key === cr.baseRoleKey)?.labelAr || cr.baseRoleKey} ·{' '}
+                              <span className="font-mono-num">{assignedCount} موظف</span>
+                            </div>
+                          </div>
+                          {canManageTeam && (
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => openEditCustomRoleModal(cr)}
+                                className="p-1.5 rounded-lg border border-slate-200 dark:border-white/10 hover:bg-white dark:hover:bg-white/10 cursor-pointer"
+                                title="تعديل الدور"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteRoleId(cr.id)}
+                                className="p-1.5 rounded-lg border border-red-300 dark:border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 cursor-pointer"
+                                title="حذف الدور"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {cr.descriptionAr && (
+                          <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                            {cr.descriptionAr}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 18-Module x 7-Action Granular Role Matrix */}
+            <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-white/10 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
+                  <h3 className="text-sm font-bold">مصفوفة الصلاحيات الشاملة (18 قسماً × 7 عمليات)</h3>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <select
+                    value={matrixRole}
+                    onChange={(e) => {
+                      setMatrixRole(e.target.value as RoleKey);
+                      setMatrixDraft(null);
+                    }}
+                    className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                  >
+                    {ROLE_CATALOG.map((r) => (
+                      <option key={r.key} value={r.key}>
+                        {r.labelAr}
+                      </option>
+                    ))}
+                  </select>
+                  {roleMatrixEditable && matrixDraft && (
+                    <button
+                      type="button"
+                      disabled={savingMatrix}
+                      onClick={() => void handleSaveRoleModuleMatrix()}
+                      className="min-h-[38px] px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      {savingMatrix ? '...' : 'حفظ مصفوفة الدور'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {!roleMatrixEditable && (
+                <div className="px-5 py-2.5 bg-amber-500/10 border-b border-amber-500/20 text-[11px] text-amber-800 dark:text-amber-200">
+                  {currentUser.role === matrixRole
+                    ? 'للقراءة فقط: لا يمكن تعديل صلاحيات دورك الحالي من هذه الشاشة.'
+                    : 'للقراءة فقط: تعديل هذا الدور غير متاح لمستواك الإداري.'}
+                </div>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-start text-xs">
+                  <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10">
+                    <tr>
+                      <th className="py-2.5 px-4 text-start font-medium whitespace-nowrap">القسم / الوحدة</th>
+                      {LEVEL_META.map((lv) => (
+                        <th key={lv.key} className="py-2.5 px-2.5 text-center font-medium whitespace-nowrap">
+                          {lv.labelAr}
+                        </th>
+                      ))}
+                      <th className="py-2.5 px-3 text-center font-medium whitespace-nowrap">تحديد الكل</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                    {MODULE_META.map((mod) => {
+                      const activeLevels = currentRoleMatrix[mod.key] || [];
                       return (
-                        <td key={r.key} className="py-2.5 px-2.5 text-center">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={!editable}
-                            title={
-                              !editable
-                                ? currentUser.role === r.key
-                                  ? 'لا يمكن تعديل صلاحيات دورك الحالي'
-                                  : 'صلاحية التعديل غير متاحة لهذا الدور'
-                                : undefined
-                            }
-                            onChange={() => handleToggleRolePermission(r.key, p.key)}
-                            className="w-4 h-4 accent-[#26478D] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                          />
-                        </td>
+                        <tr key={mod.key} className="hover:bg-slate-50/70 dark:hover:bg-white/[0.02]">
+                          <td className="py-2 px-4 font-medium whitespace-nowrap">
+                            <span>{mod.labelAr}</span>
+                            <span className="text-[10px] text-slate-400 ms-1.5">({mod.groupAr})</span>
+                          </td>
+                          {LEVEL_META.map((lv) => (
+                            <td key={lv.key} className="py-2 px-2.5 text-center">
+                              <input
+                                type="checkbox"
+                                checked={activeLevels.includes(lv.key)}
+                                disabled={!roleMatrixEditable}
+                                onChange={() => toggleRoleMatrixCell(mod.key, lv.key)}
+                                className="w-4 h-4 accent-[#26478D] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              />
+                            </td>
+                          ))}
+                          <td className="py-2 px-3 text-center">
+                            <button
+                              type="button"
+                              disabled={!roleMatrixEditable}
+                              onClick={() => toggleRoleMatrixRowAll(mod.key)}
+                              className="text-[11px] font-semibold text-[#26478D] dark:text-blue-400 hover:underline disabled:opacity-40 cursor-pointer"
+                            >
+                              {activeLevels.length === LEVEL_META.length ? 'إلغاء' : 'الكل'}
+                            </button>
+                          </td>
+                        </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Legacy Quick Permissions Reference Matrix */}
+            <div className="rounded-2xl border border-slate-200 dark:border-white/10 glass-surface overflow-x-auto">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-white/10 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
+                  <h3 className="text-sm font-bold">مصفوفة الصلاحيات السريعة للأدوار القياسية</h3>
+                </div>
+                <span className="text-[11px] text-slate-500">تزامن فوري على مستوى الخادم</span>
+              </div>
+              <table className="w-full text-start text-xs">
+                <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10">
+                  <tr>
+                    <th className="py-2.5 px-4 text-start font-medium whitespace-nowrap">الصلاحية</th>
+                    {ROLE_CATALOG.map((r) => (
+                      <th key={r.key} className="py-2.5 px-2.5 text-center font-medium whitespace-nowrap">
+                        {r.labelAr}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                  {PERMISSION_KEYS_LIST.map((p) => (
+                    <tr key={p.key} className="hover:bg-slate-50/70 dark:hover:bg-white/[0.02]">
+                      <td className="py-2.5 px-4 font-medium whitespace-nowrap">{p.labelAr}</td>
+                      {ROLE_CATALOG.map((r) => {
+                        const checked = (state.rolePermissions[r.key] || []).includes(p.key);
+                        const editable = canModifyRoleColumn(r.key);
+                        return (
+                          <td key={r.key} className="py-2.5 px-2.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!editable}
+                              onChange={() => handleToggleRolePermission(r.key, p.key)}
+                              className="w-4 h-4 accent-[#26478D] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* TAB 5: COMPREHENSIVE IMMUTABLE AUDIT TRAIL */}
       {activeTab === 'audit' && (
@@ -1985,26 +2650,38 @@ export function TeamWorkforceView() {
             <div className="p-6 bg-gradient-to-br from-[#26478D] via-[#1B356D] to-[#0A0E1A] text-white space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="w-14 h-14 rounded-2xl bg-white/15 backdrop-blur-md border border-white/20 flex items-center justify-center text-xl font-bold shrink-0">
-                    {selectedUser.nameAr.slice(0, 2)}
-                  </div>
+                  {selectedUser.avatarDataUrl ? (
+                    <img
+                      src={selectedUser.avatarDataUrl}
+                      alt={selectedUser.nameAr}
+                      className="w-14 h-14 rounded-2xl object-cover border border-white/25 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-14 h-14 rounded-2xl bg-white/15 backdrop-blur-md border border-white/20 flex items-center justify-center text-xl font-bold shrink-0">
+                      {selectedUser.nameAr.slice(0, 2)}
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <div className="text-xs text-blue-100 font-semibold">
-                      {selectedUser.roleLabelAr} · {getUserStatus(selectedUser)}
+                      {selectedUser.roleLabelAr}
+                      {selectedUser.jobTitle && selectedUser.jobTitle !== selectedUser.roleLabelAr
+                        ? ` · ${selectedUser.jobTitle}`
+                        : ''}
+                      {' · '}
+                      {selectedUser.accountStatus || (selectedUser.active ? getUserStatus(selectedUser) : 'موقوف')}
                     </div>
                     <h3 className="text-xl font-bold truncate mt-0.5">{selectedUser.nameAr}</h3>
-                    <div className="text-xs text-blue-100/80 font-mono-num">
+                    <div className="text-xs text-blue-100/80 font-mono-num" dir="ltr">
+                      {selectedUser.username ? `@${selectedUser.username} · ` : ''}
                       {selectedUser.email} · {selectedUser.phone}
                     </div>
                   </div>
                 </div>
-                <button
-                  type="button"
+                <UnifiedModalCloseButton
                   onClick={() => setSelectedUserId(null)}
-                  className="min-w-[40px] min-h-[40px] rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                  lang={lang}
+                  className="!bg-white/15 !border-white/25 !text-white hover:!bg-white/25"
+                />
               </div>
             </div>
 
@@ -2016,7 +2693,7 @@ export function TeamWorkforceView() {
                   { id: 'tasks', label: 'المهام الحالية', icon: CheckSquare },
                   { id: 'activity', label: 'سجل النشاط', icon: Activity },
                   { id: 'permissions', label: 'الصلاحيات والعقارات', icon: Shield },
-                  { id: 'settings', label: 'الإعدادات والأجهزة', icon: Settings },
+                  { id: 'settings', label: 'التحرير والحالة والأجهزة', icon: Settings },
                 ] as { id: MemberDetailTab; label: string; icon: React.ComponentType<{ className?: string }> }[]
               ).map((t) => {
                 const Icon = t.icon;
@@ -2025,7 +2702,7 @@ export function TeamWorkforceView() {
                     key={t.id}
                     type="button"
                     onClick={() => setDetailTab(t.id)}
-                    className={`shrink-0 min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
+                    className={`shrink-0 whitespace-nowrap min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer ${
                       detailTab === t.id
                         ? 'bg-[#26478D] text-white'
                         : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-white/10'
@@ -2158,7 +2835,7 @@ export function TeamWorkforceView() {
               )}
 
               {detailTab === 'permissions' && (() => {
-                const modPerms = selectedUser.customModulePermissions || buildDefaultModulePerms(selectedUser.role);
+                const modPerms = getEffectiveModulePermissions(state, selectedUser);
                 const permEditable = canModifyTargetPermissions(selectedUser);
                 return (
                   <div className="space-y-5">
@@ -2200,7 +2877,7 @@ export function TeamWorkforceView() {
                                 type="checkbox"
                                 checked={checked}
                                 disabled={!permEditable}
-                                onChange={() => handleToggleUserPropertyScope(selectedUser, p.id)}
+                                onChange={() => void handleToggleUserPropertyScope(selectedUser, p.id)}
                                 className="w-4 h-4 accent-[#26478D] disabled:opacity-40"
                               />
                               <span className="truncate">{p.nameAr}</span>
@@ -2213,7 +2890,7 @@ export function TeamWorkforceView() {
                       </p>
                     </div>
 
-                    {/* 5-Level Granular Matrix */}
+                    {/* 18-Module x 7-Action Granular Matrix */}
                     <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-x-auto">
                       <table className="w-full text-start text-xs">
                         <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10">
@@ -2231,14 +2908,14 @@ export function TeamWorkforceView() {
                             const activeLevels = modPerms[mod.key] || [];
                             return (
                               <tr key={mod.key}>
-                                <td className="py-2 px-3 font-medium">{mod.labelAr}</td>
+                                <td className="py-2 px-3 font-medium whitespace-nowrap">{mod.labelAr}</td>
                                 {LEVEL_META.map((lv) => (
                                   <td key={lv.key} className="py-2 px-2 text-center">
                                     <input
                                       type="checkbox"
                                       checked={activeLevels.includes(lv.key)}
                                       disabled={!permEditable}
-                                      onChange={() => handleToggleUserModuleLevel(selectedUser, mod.key, lv.key)}
+                                      onChange={() => void handleToggleUserModuleLevel(selectedUser, mod.key, lv.key)}
                                       className="w-4 h-4 accent-[#26478D] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                                     />
                                   </td>
@@ -2255,8 +2932,189 @@ export function TeamWorkforceView() {
 
               {detailTab === 'settings' && (
                 <div className="space-y-4">
+                  {/* Edit Employee Profile, JobTitle & Role */}
+                  {canManageTeam && (
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-bold flex items-center gap-1.5">
+                          <Edit3 className="w-4 h-4 text-[#26478D] dark:text-blue-400" />
+                          <span>تعديل الملف الإداري والدور الوظيفي</span>
+                        </div>
+                        {(!editEmpForm || editEmpForm.userId !== selectedUser.id) && (
+                          <button
+                            type="button"
+                            onClick={() => openEditEmpForm(selectedUser)}
+                            className="px-3 py-1.5 rounded-lg bg-[#26478D]/10 text-[#26478D] dark:text-blue-300 font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                          >
+                            تحرير البيانات
+                          </button>
+                        )}
+                      </div>
+
+                      {editEmpForm && editEmpForm.userId === selectedUser.id ? (
+                        <form onSubmit={handleSaveEmployeeAdminEdit} className="space-y-3 pt-1">
+                          <div className="p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[11px] text-blue-700 dark:text-blue-200">
+                            ملاحظة أمنية: تعديل المسمى الوظيفي للتعريف الإداري فقط ولا يمنح أو يغيّر أي صلاحية تلقائياً.
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="text-slate-500 block mb-1">الاسم الكامل (عربي)</label>
+                              <input
+                                required
+                                value={editEmpForm.nameAr}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, nameAr: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-slate-500 block mb-1">الاسم (إنجليزي)</label>
+                              <input
+                                value={editEmpForm.nameEn}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, nameEn: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-slate-500 block mb-1">المسمى الوظيفي</label>
+                              <input
+                                value={editEmpForm.jobTitle}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, jobTitle: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-slate-500 block mb-1">القسم / الإدارة</label>
+                              <input
+                                value={editEmpForm.department}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, department: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-slate-500 block mb-1">الجوال الأساسي</label>
+                              <input
+                                required
+                                dir="ltr"
+                                value={editEmpForm.phone}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, phone: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-slate-500 block mb-1">جوال إضافي</label>
+                              <input
+                                dir="ltr"
+                                value={editEmpForm.secondaryPhone}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, secondaryPhone: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-slate-500 block mb-1">البريد الإلكتروني</label>
+                              <input
+                                required
+                                type="email"
+                                dir="ltr"
+                                value={editEmpForm.email}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, email: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-slate-500 block mb-1">اسم المستخدم</label>
+                              <input
+                                dir="ltr"
+                                value={editEmpForm.username}
+                                onChange={(e) => setEditEmpForm({ ...editEmpForm, username: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                              />
+                            </div>
+                            {canModifyTargetPermissions(selectedUser) && (
+                              <>
+                                <div>
+                                  <label className="text-slate-500 block mb-1">الدور القياسي</label>
+                                  <select
+                                    value={editEmpForm.role}
+                                    onChange={(e) =>
+                                      setEditEmpForm({
+                                        ...editEmpForm,
+                                        role: e.target.value as RoleKey,
+                                        customRoleId: '',
+                                      })
+                                    }
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                                  >
+                                    {ROLE_CATALOG.filter(
+                                      (r) =>
+                                        r.key !== 'owner' &&
+                                        (isSysOwner || (r.key !== 'sys_owner' && r.key !== 'gm'))
+                                    ).map((r) => (
+                                      <option key={r.key} value={r.key}>
+                                        {r.labelAr}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-slate-500 block mb-1">أو دور مخصص</label>
+                                  <select
+                                    value={editEmpForm.customRoleId}
+                                    onChange={(e) => setEditEmpForm({ ...editEmpForm, customRoleId: e.target.value })}
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                                  >
+                                    <option value="">بدون دور مخصص</option>
+                                    {customRoles.map((cr) => (
+                                      <option key={cr.id} value={cr.id}>
+                                        {cr.nameAr}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-slate-500 block mb-1">سقف الاعتماد المالي (ر.س)</label>
+                                  <input
+                                    type="number"
+                                    value={editEmpForm.approvalLimitSar}
+                                    onChange={(e) =>
+                                      setEditEmpForm({ ...editEmpForm, approvalLimitSar: Number(e.target.value) })
+                                    }
+                                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                                  />
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditEmpForm(null)}
+                              className="px-3.5 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 cursor-pointer"
+                            >
+                              إلغاء
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={savingEmpEdit}
+                              className="px-4 py-1.5 rounded-lg bg-[#26478D] text-white font-semibold cursor-pointer"
+                            >
+                              {savingEmpEdit ? '...' : 'حفظ التعديلات'}
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                          <div>المسمى: <strong>{selectedUser.jobTitle || selectedUser.roleLabelAr}</strong></div>
+                          <div>القسم: <strong>{selectedUser.department || '—'}</strong></div>
+                          <div>اسم المستخدم: <strong className="font-mono-num">{selectedUser.username || '—'}</strong></div>
+                          <div>جوال إضافي: <strong className="font-mono-num">{selectedUser.secondaryPhone || '—'}</strong></div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Security + Lifecycle */}
                   <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 space-y-3">
-                    <div className="font-bold">الأمان والتحقق للحساب</div>
+                    <div className="font-bold">الأمان ودورة حياة الحساب</div>
                     <label className="flex items-center justify-between gap-2 cursor-pointer">
                       <span>تفعيل المصادقة الثنائية (2FA)</span>
                       <input
@@ -2290,26 +3148,78 @@ export function TeamWorkforceView() {
                       />
                     </label>
                     {canModifyTargetPermissions(selectedUser) && (
-                      <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 dark:border-white/10">
-                        <span>حالة تفعيل الحساب في الشركة</span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleUpdateUserPatch(
-                                selectedUser.id,
-                                { active: !selectedUser.active },
-                                selectedUser.active ? 'تم إيقاف حساب الموظف' : 'تم إعادة تفعيل حساب الموظف'
-                              )
-                            }
-                            className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer ${
-                              selectedUser.active
-                                ? 'border border-amber-300 text-amber-700 dark:text-amber-300'
-                                : 'bg-emerald-600 text-white'
-                            }`}
-                          >
-                            {selectedUser.active ? 'تعطيل الحساب مؤقتاً' : 'تفعيل الحساب'}
-                          </button>
+                      <div className="pt-3 border-t border-slate-200 dark:border-white/10 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span>حالة الحساب الحالية:</span>
+                          <strong className="text-[#26478D] dark:text-blue-400">
+                            {selectedUser.accountStatus || (selectedUser.active ? 'نشط' : 'موقوف')}
+                          </strong>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {selectedUser.accountStatus !== 'نشط' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setLifecycleConfirm({
+                                  userId: selectedUser.id,
+                                  nameAr: selectedUser.nameAr,
+                                  targetStatus: 'نشط',
+                                  reason: '',
+                                })
+                              }
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              تفعيل / إعادة تنشيط الحساب
+                            </button>
+                          )}
+                          {selectedUser.accountStatus !== 'موقوف' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setLifecycleConfirm({
+                                  userId: selectedUser.id,
+                                  nameAr: selectedUser.nameAr,
+                                  targetStatus: 'موقوف',
+                                  reason: '',
+                                })
+                              }
+                              className="px-3 py-1.5 rounded-lg border border-amber-400 text-amber-700 dark:text-amber-300 font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              إيقاف مؤقت
+                            </button>
+                          )}
+                          {selectedUser.accountStatus !== 'مرفوض' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setLifecycleConfirm({
+                                  userId: selectedUser.id,
+                                  nameAr: selectedUser.nameAr,
+                                  targetStatus: 'مرفوض',
+                                  reason: '',
+                                })
+                              }
+                              className="px-3 py-1.5 rounded-lg border border-red-300 dark:border-red-500/30 text-red-600 dark:text-red-400 font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              رفض الانضمام
+                            </button>
+                          )}
+                          {selectedUser.accountStatus !== 'منتهي الوصول' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setLifecycleConfirm({
+                                  userId: selectedUser.id,
+                                  nameAr: selectedUser.nameAr,
+                                  targetStatus: 'منتهي الوصول',
+                                  reason: '',
+                                })
+                              }
+                              className="px-3 py-1.5 rounded-lg border border-red-400 dark:border-red-500/40 text-red-700 dark:text-red-300 font-semibold cursor-pointer whitespace-nowrap shrink-0"
+                            >
+                              إنهاء الصلاحية والوصول
+                            </button>
+                          )}
 
                           {isSysOwner && selectedUser.role !== 'sys_owner' && (
                             confirmDeleteUserId === selectedUser.id ? (
@@ -2445,13 +3355,7 @@ export function TeamWorkforceView() {
                   </div>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedTaskId(null)}
-                className="min-w-[36px] min-h-[36px] rounded-xl flex items-center justify-center hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setSelectedTaskId(null)} lang={lang} />
             </div>
 
             <p className="text-slate-600 dark:text-slate-300 leading-relaxed">{selectedTask.description}</p>
@@ -2598,163 +3502,240 @@ export function TeamWorkforceView() {
         </div>
       )}
 
-      {/* 5-STEP ADD EMPLOYEE WIZARD MODAL */}
+      {/* NEW EMPLOYEE & INVITE MODAL */}
       {showAddWizard && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-5 my-auto animate-aqar-fade-scale text-xs">
-            <div className="flex items-center justify-between gap-3">
+          <form
+            onSubmit={handleSubmitNewEmployee}
+            className="w-full max-w-3xl rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-5 my-auto animate-aqar-fade-scale text-xs"
+          >
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-white/10">
               <div>
-                <h3 className="text-base font-bold">معالج إضافة موظف جديد (خطوة {wizardStep} من 5)</h3>
+                <h3 className="text-base font-bold">إضافة موظف جديد وإرسال دعوة الانضمام</h3>
                 <p className="text-[11px] text-slate-500">
-                  تحديد البيانات الأساسية، الدور الوظيفي، مصفوفة الصلاحيات والعقارات، وإعدادات الأمان
+                  يبدأ الحساب بحالة «بانتظار التفعيل» ويُفعّل عند قبول الموظف للدعوة وإعداد كلمة مروره الخاصة
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowAddWizard(false)}
-                className="min-w-[36px] min-h-[36px] rounded-xl flex items-center justify-center hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowAddWizard(false)} lang={lang} />
             </div>
 
-            {/* Stepper Progress */}
-            <div className="grid grid-cols-5 gap-1.5">
-              {[1, 2, 3, 4, 5].map((st) => (
-                <div
-                  key={st}
-                  className={`h-1.5 rounded-full transition-colors ${
-                    st <= wizardStep ? 'bg-[#26478D]' : 'bg-slate-200 dark:bg-white/10'
-                  }`}
+            {/* Avatar Picker */}
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-[#26478D]/15 dark:bg-[#26478D]/30 border border-slate-200 dark:border-white/15 flex items-center justify-center overflow-hidden shrink-0">
+                {wizardForm.avatarDataUrl ? (
+                  <img src={wizardForm.avatarDataUrl} alt="avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <UserPlus className="w-6 h-6 text-[#26478D] dark:text-blue-300" />
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="px-3 py-1.5 rounded-xl bg-[#26478D]/10 text-[#26478D] dark:text-blue-300 font-semibold inline-flex items-center gap-1.5 cursor-pointer">
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>صورة الملف الشخصي (اختياري)</span>
+                  <input type="file" accept="image/*" onChange={handleWizardAvatarPick} className="hidden" />
+                </label>
+                {wizardForm.avatarDataUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setWizardForm((prev) => ({ ...prev, avatarDataUrl: '' }))}
+                    className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-white/15 text-slate-500 cursor-pointer"
+                  >
+                    إزالة
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Personal & Contact Fields */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="font-semibold">الاسم الكامل (عربي) *</label>
+                <input
+                  required
+                  value={wizardForm.nameAr}
+                  onChange={(e) => setWizardForm({ ...wizardForm, nameAr: e.target.value })}
+                  placeholder="مثال: سارة فهد القحطاني"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
                 />
-              ))}
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">الاسم بالإنجليزية</label>
+                <input
+                  dir="ltr"
+                  value={wizardForm.nameEn}
+                  onChange={(e) => setWizardForm({ ...wizardForm, nameEn: e.target.value })}
+                  placeholder="Sarah Al-Qahtani"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">اسم المستخدم (اختياري)</label>
+                <input
+                  dir="ltr"
+                  value={wizardForm.username}
+                  onChange={(e) => setWizardForm({ ...wizardForm, username: e.target.value })}
+                  placeholder="sarah.leasing"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">المسمى الوظيفي</label>
+                <input
+                  value={wizardForm.jobTitle}
+                  onChange={(e) => setWizardForm({ ...wizardForm, jobTitle: e.target.value })}
+                  placeholder="أخصائي تأجير وعقود"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">القسم / الإدارة</label>
+                <input
+                  value={wizardForm.department}
+                  onChange={(e) => setWizardForm({ ...wizardForm, department: e.target.value })}
+                  placeholder="التأجير / المالية / الصيانة"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">البريد الإلكتروني *</label>
+                <input
+                  required
+                  type="email"
+                  dir="ltr"
+                  value={wizardForm.email}
+                  onChange={(e) => setWizardForm({ ...wizardForm, email: e.target.value })}
+                  placeholder="staff@company.sa"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">رقم الجوال الأساسي *</label>
+                <input
+                  required
+                  dir="ltr"
+                  value={wizardForm.phone}
+                  onChange={(e) => setWizardForm({ ...wizardForm, phone: e.target.value })}
+                  placeholder="0551234567"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">رقم جوال إضافي (اختياري)</label>
+                <input
+                  dir="ltr"
+                  value={wizardForm.secondaryPhone}
+                  onChange={(e) => setWizardForm({ ...wizardForm, secondaryPhone: e.target.value })}
+                  placeholder="0500000000"
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-semibold">سقف الاعتماد المالي (ر.س)</label>
+                <input
+                  type="number"
+                  value={wizardForm.approvalLimitSar}
+                  onChange={(e) => setWizardForm({ ...wizardForm, approvalLimitSar: Number(e.target.value) })}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
+                />
+              </div>
             </div>
 
-            {wizardStep === 1 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="font-semibold">الاسم الكامل (عربي) *</label>
-                  <input
-                    required
-                    value={wizardForm.nameAr}
-                    onChange={(e) => setWizardForm({ ...wizardForm, nameAr: e.target.value })}
-                    placeholder="مثال: عبدالعزيز محمد السبيعي"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold">الاسم بالإنجليزية</label>
-                  <input
-                    value={wizardForm.nameEn}
-                    onChange={(e) => setWizardForm({ ...wizardForm, nameEn: e.target.value })}
-                    placeholder="Abdulaziz Al-Subaie"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold">رقم الجوال *</label>
-                  <input
-                    required
-                    value={wizardForm.phone}
-                    onChange={(e) => setWizardForm({ ...wizardForm, phone: e.target.value })}
-                    placeholder="0551234567"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold">البريد الإلكتروني</label>
-                  <input
-                    type="email"
-                    value={wizardForm.email}
-                    onChange={(e) => setWizardForm({ ...wizardForm, email: e.target.value })}
-                    placeholder="staff@aqarplus.sa"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
-                  />
-                </div>
-                <div className="sm:col-span-2 space-y-1">
-                  <label className="font-semibold">التخصص الدقيق (للتوزيع الذكي للمهام)</label>
-                  <input
-                    value={wizardForm.specialty}
-                    onChange={(e) => setWizardForm({ ...wizardForm, specialty: e.target.value })}
-                    placeholder="مثال: تأجير وتوثيق إيجار / صيانة كهرباء وتكييف / تحصيل مالي"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
-                  />
-                </div>
+            {/* Role & Invitation Channel */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <label className="font-semibold">الدور الوظيفي القياسي</label>
+                <select
+                  value={wizardForm.role}
+                  onChange={(e) => handleWizardRoleChange(e.target.value as RoleKey)}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  {ROLE_CATALOG.filter(
+                    (r) => r.key !== 'owner' && (isSysOwner || (r.key !== 'sys_owner' && r.key !== 'gm'))
+                  ).map((r) => (
+                    <option key={r.key} value={r.key}>
+                      {r.labelAr} ({r.tierAr})
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
-
-            {wizardStep === 2 && (
-              <div className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto pe-1">
-                  {ROLE_CATALOG.filter((r) => r.key !== 'owner').map((r) => {
-                    const selected = wizardForm.role === r.key;
-                    return (
-                      <button
-                        key={r.key}
-                        type="button"
-                        onClick={() => handleWizardRoleChange(r.key)}
-                        className={`p-3 rounded-xl border text-start space-y-1 cursor-pointer transition-colors ${
-                          selected
-                            ? 'border-[#26478D] bg-[#26478D]/10 dark:bg-blue-500/15'
-                            : 'border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/[0.03]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold">{r.labelAr}</span>
-                          <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            {r.tierAr}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500">{r.descAr}</p>
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="space-y-1">
-                  <label className="font-semibold">حد الاعتماد المالي المسموح للموظف (ر.س)</label>
-                  <input
-                    type="number"
-                    value={wizardForm.approvalLimitSar}
-                    onChange={(e) => setWizardForm({ ...wizardForm, approvalLimitSar: Number(e.target.value) })}
-                    className="w-full min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent font-mono-num"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="font-semibold">أو إسناد دور مخصص</label>
+                <select
+                  value={wizardForm.customRoleId}
+                  onChange={(e) => handleWizardCustomRoleChange(e.target.value)}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  <option value="">استخدام الدور القياسي</option>
+                  {customRoles.map((cr) => (
+                    <option key={cr.id} value={cr.id}>
+                      {cr.nameAr}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
+              <div className="space-y-1">
+                <label className="font-semibold">طريقة إرسال الدعوة</label>
+                <select
+                  value={wizardForm.channel}
+                  onChange={(e) =>
+                    setWizardForm({ ...wizardForm, channel: e.target.value as EmployeeInviteChannel })
+                  }
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  <option value="whatsapp">واتساب (WhatsApp)</option>
+                  <option value="email">البريد الإلكتروني (Email)</option>
+                  <option value="sms">رسالة نصية (SMS)</option>
+                  <option value="copy_link">نسخ رابط التفعيل مباشرة</option>
+                </select>
+              </div>
+            </div>
 
-            {wizardStep === 3 && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <div className="font-bold">تقييد الوصول بعقارات محددة (اختياري — اتركه فارغاً لكل العقارات)</div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {properties.map((p) => {
-                      const checked = wizardForm.allowedPropertyIds.includes(p.id);
-                      return (
-                        <label
-                          key={p.id}
-                          className="flex items-center gap-2 p-2 rounded-lg border border-slate-200 dark:border-white/10 cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() =>
-                              setWizardForm((prev) => ({
-                                ...prev,
-                                allowedPropertyIds: checked
-                                  ? prev.allowedPropertyIds.filter((id) => id !== p.id)
-                                  : [...prev.allowedPropertyIds, p.id],
-                              }))
-                            }
-                            className="w-4 h-4 accent-[#26478D]"
-                          />
-                          <span className="truncate">{p.nameAr}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
+            {/* Property Scope & Custom Module Override */}
+            <div className="space-y-2">
+              <div className="font-bold">تقييد الوصول بعقارات محددة (اختياري)</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-28 overflow-y-auto">
+                {properties.map((p) => {
+                  const checked = wizardForm.allowedPropertyIds.includes(p.id);
+                  return (
+                    <label
+                      key={p.id}
+                      className="flex items-center gap-2 p-2 rounded-lg border border-slate-200 dark:border-white/10 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setWizardForm((prev) => ({
+                            ...prev,
+                            allowedPropertyIds: checked
+                              ? prev.allowedPropertyIds.filter((id) => id !== p.id)
+                              : [...prev.allowedPropertyIds, p.id],
+                          }))
+                        }
+                        className="w-3.5 h-3.5 accent-[#26478D]"
+                      />
+                      <span className="truncate">{p.nameAr}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
 
-                <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-x-auto max-h-56">
+            <div className="space-y-2">
+              <label className="inline-flex items-center gap-2 cursor-pointer font-semibold">
+                <input
+                  type="checkbox"
+                  checked={wizardForm.useCustomPermsOverride}
+                  onChange={(e) =>
+                    setWizardForm((prev) => ({ ...prev, useCustomPermsOverride: e.target.checked }))
+                  }
+                  className="w-4 h-4 accent-[#26478D]"
+                />
+                <span>تخصيص صلاحيات إضافية لهذا الموظف (18 قسماً × 7 عمليات)</span>
+              </label>
+
+              {wizardForm.useCustomPermsOverride && (
+                <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-x-auto max-h-52">
                   <table className="w-full text-start text-[11px]">
                     <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10 sticky top-0">
                       <tr>
@@ -2771,7 +3752,7 @@ export function TeamWorkforceView() {
                         const levels = wizardForm.customModulePermissions[m.key] || [];
                         return (
                           <tr key={m.key}>
-                            <td className="py-1.5 px-3 font-medium">{m.labelAr}</td>
+                            <td className="py-1.5 px-3 font-medium whitespace-nowrap">{m.labelAr}</td>
                             {LEVEL_META.map((lv) => (
                               <td key={lv.key} className="py-1.5 px-2 text-center">
                                 <input
@@ -2788,109 +3769,349 @@ export function TeamWorkforceView() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
-            {wizardStep === 4 && (
-              <div className="space-y-3">
-                <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer">
-                  <div>
-                    <div className="font-bold">تفعيل المصادقة الثنائية (2FA)</div>
-                    <div className="text-[11px] text-slate-500">إرسال رمز تحقق إضافي عند الدخول من جهاز جديد</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={wizardForm.twoFactorEnabled}
-                    onChange={(e) => setWizardForm({ ...wizardForm, twoFactorEnabled: e.target.checked })}
-                    className="w-4 h-4 accent-[#26478D]"
-                  />
-                </label>
-                <label className="flex items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer">
-                  <div>
-                    <div className="font-bold">السماح بتسجيل الدخول بالبصمة / Face ID</div>
-                    <div className="text-[11px] text-slate-500">دخول سريع وآمن عبر الأجهزة المحمولة</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={wizardForm.biometricEnabled}
-                    onChange={(e) => setWizardForm({ ...wizardForm, biometricEnabled: e.target.checked })}
-                    className="w-4 h-4 accent-[#26478D]"
-                  />
-                </label>
-                <div className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.06] text-[11px] text-emerald-700 dark:text-emerald-300">
-                  سيتم إنشاء كلمة مرور مؤقتة وإلزام الموظف بتحديثها عند أول دخول وفق سياسة الـ {effectivePolicy.passwordExpiryDays} يوماً.
-                </div>
-              </div>
-            )}
-
-            {wizardStep === 5 && (
-              <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.02] space-y-2">
-                <div className="font-bold text-sm text-[#26478D] dark:text-blue-400">مراجعة بيانات الحساب الجديد</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-slate-500">الاسم:</span> <strong>{wizardForm.nameAr}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">الجوال:</span>{' '}
-                    <strong className="font-mono-num">{wizardForm.phone}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">الدور:</span>{' '}
-                    <strong>{ROLE_CATALOG.find((r) => r.key === wizardForm.role)?.labelAr}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-500">حد الاعتماد:</span>{' '}
-                    <strong className="font-mono-num">{formatSar(wizardForm.approvalLimitSar, lang)}</strong>
-                  </div>
-                  <div className="col-span-2">
-                    <span className="text-slate-500">نطاق العقارات:</span>{' '}
-                    <strong>
-                      {wizardForm.allowedPropertyIds.length > 0
-                        ? `${wizardForm.allowedPropertyIds.length} عقارات محددة`
-                        : 'جميع عقارات الشركة'}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between pt-2">
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-white/10">
               <button
                 type="button"
-                disabled={wizardStep === 1}
-                onClick={() => setWizardStep((s) => Math.max(1, s - 1) as 1 | 2 | 3 | 4 | 5)}
-                className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 inline-flex items-center gap-1 disabled:opacity-40 cursor-pointer"
+                onClick={() => setShowAddWizard(false)}
+                className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer"
               >
-                <ChevronRight className="w-4 h-4" />
-                <span>السابق</span>
+                إلغاء
               </button>
+              <button
+                type="submit"
+                disabled={wizardSubmitting}
+                className="min-h-[40px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Send className="w-4 h-4" />
+                <span>{wizardSubmitting ? 'جاري الإنشاء...' : 'إضافة الموظف وإصدار الدعوة'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
-              {wizardStep < 5 ? (
+      {/* INVITE DISPATCH HANDOFF MODAL */}
+      {inviteDispatch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-4 shadow-2xl text-xs">
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-white/10">
+              <div>
+                <h3 className="text-base font-bold">تم تجهيز دعوة الانضمام لـ {inviteDispatch.fullName}</h3>
+                <p className="text-[11px] text-slate-500">{inviteDispatch.roleLabelAr}</p>
+              </div>
+              <UnifiedModalCloseButton onClick={() => setInviteDispatch(null)} lang={lang} />
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-800 dark:text-blue-200 leading-relaxed">
+              {inviteDispatch.deliveryNotice}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="font-semibold text-slate-500">رابط التفعيل لمرة واحدة (صالح 72 ساعة)</label>
+              <div className="flex items-center gap-2">
+                <input
+                  readOnly
+                  dir="ltr"
+                  value={inviteDispatch.inviteUrl}
+                  className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#0A0E1A] font-mono-num text-[11px]"
+                />
                 <button
                   type="button"
-                  onClick={() => {
-                    if (wizardStep === 1 && (!wizardForm.nameAr.trim() || !wizardForm.phone.trim())) {
-                      pushToast('error', 'الرجاء إدخال الاسم ورقم الجوال أولاً');
-                      return;
-                    }
-                    setWizardStep((s) => Math.min(5, s + 1) as 1 | 2 | 3 | 4 | 5);
-                  }}
-                  className="min-h-[40px] px-5 py-2 rounded-xl bg-[#26478D] text-white font-semibold inline-flex items-center gap-1 cursor-pointer"
+                  onClick={() => void handleCopyText(inviteDispatch.inviteUrl, 'رابط الدعوة')}
+                  className="px-3 py-2 rounded-xl bg-[#26478D] text-white font-semibold inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
                 >
-                  <span>التالي</span>
-                  <ChevronLeft className="w-4 h-4" />
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>نسخ</span>
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={wizardSubmitting}
-                  onClick={handleSubmitNewEmployee}
-                  className="min-h-[40px] px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] text-amber-800 dark:text-amber-200 font-semibold">
+                  رمز التحقق الأمني المرفق (6 أرقام)
+                </div>
+                <div className="text-lg font-mono-num font-bold tracking-widest mt-0.5" dir="ltr">
+                  {inviteDispatch.verificationCode}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCopyText(inviteDispatch.verificationCode, 'رمز التحقق')}
+                className="px-3 py-1.5 rounded-xl border border-amber-400 text-amber-800 dark:text-amber-200 font-semibold inline-flex items-center gap-1 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>نسخ الرمز</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+              {inviteDispatch.channel !== 'copy_link' && (
+                <a
+                  href={inviteDispatch.handoffUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 >
-                  <UserCheck className="w-4 h-4" />
-                  <span>{wizardSubmitting ? 'جاري الإنشاء...' : 'تأكيد وإضافة الموظف'}</span>
-                </button>
+                  {inviteDispatch.channel === 'email' ? (
+                    <Mail className="w-4 h-4" />
+                  ) : (
+                    <MessageSquare className="w-4 h-4" />
+                  )}
+                  <span>فتح عبر {CHANNEL_LABELS[inviteDispatch.channel]?.labelAr}</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
               )}
+              <button
+                type="button"
+                onClick={() => setInviteDispatch(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 font-semibold cursor-pointer ms-auto"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CANCEL INVITATION CONFIRM MODAL */}
+      {cancelInviteConfirmId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-5 space-y-4 text-xs">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold">تأكيد إلغاء الدعوة</h3>
+              <UnifiedModalCloseButton onClick={() => setCancelInviteConfirmId(null)} lang={lang} />
+            </div>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              سيتم إبطال رابط التفعيل ورمز التحقق لهذه الدعوة فوراً ولن يتمكن المدعو من استخدامها.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCancelInviteConfirmId(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer"
+              >
+                تراجع
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCancelInvitation(cancelInviteConfirmId)}
+                className="px-4 py-2 rounded-xl bg-red-600 text-white font-semibold cursor-pointer"
+              >
+                تأكيد إلغاء الدعوة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ACCOUNT LIFECYCLE CONFIRMATION MODAL */}
+      {lifecycleConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-5 space-y-4 text-xs">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold">
+                تأكيد تغيير حالة «{lifecycleConfirm.nameAr}» إلى ({lifecycleConfirm.targetStatus})
+              </h3>
+              <UnifiedModalCloseButton onClick={() => setLifecycleConfirm(null)} lang={lang} />
+            </div>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              {lifecycleConfirm.targetStatus === 'نشط'
+                ? 'سيتم تفعيل الحساب والسماح للموظف بتسجيل الدخول حسب صلاحياته.'
+                : 'سيتم إغلاق جميع جلسات الموظف النشطة فوراً ومنعه من الدخول إلى النظام.'}
+            </p>
+            <div>
+              <label className="block font-semibold mb-1">السبب (يُوثق في سجل التدقيق)</label>
+              <input
+                value={lifecycleConfirm.reason}
+                onChange={(e) => setLifecycleConfirm({ ...lifecycleConfirm, reason: e.target.value })}
+                placeholder="مثال: انتهاء الفترة / إيقاف إداري / مراجعة الصلاحيات"
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setLifecycleConfirm(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmLifecycleChange()}
+                className={`px-4 py-2 rounded-xl text-white font-semibold cursor-pointer ${
+                  lifecycleConfirm.targetStatus === 'نشط' ? 'bg-emerald-600' : 'bg-red-600'
+                }`}
+              >
+                تأكيد التنفيذ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE / EDIT CUSTOM ROLE MODAL */}
+      {showCustomRoleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4 overflow-y-auto">
+          <form
+            onSubmit={handleSaveCustomRole}
+            className="w-full max-w-3xl rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-6 space-y-4 my-auto text-xs"
+          >
+            <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-white/10">
+              <h3 className="text-base font-bold">
+                {editingCustomRole ? `تعديل الدور المخصص: ${editingCustomRole.nameAr}` : 'إنشاء دور وظيفي مخصص جديد'}
+              </h3>
+              <UnifiedModalCloseButton onClick={() => setShowCustomRoleModal(false)} lang={lang} />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="font-semibold block mb-1">اسم الدور (عربي) *</label>
+                <input
+                  required
+                  value={customRoleForm.nameAr}
+                  onChange={(e) => setCustomRoleForm({ ...customRoleForm, nameAr: e.target.value })}
+                  placeholder="مشرف تحصيل المنطقة"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                />
+              </div>
+              <div>
+                <label className="font-semibold block mb-1">اسم الدور (إنجليزي)</label>
+                <input
+                  dir="ltr"
+                  value={customRoleForm.nameEn}
+                  onChange={(e) => setCustomRoleForm({ ...customRoleForm, nameEn: e.target.value })}
+                  placeholder="Regional Collection Lead"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+                />
+              </div>
+              <div>
+                <label className="font-semibold block mb-1">قالب الأساس</label>
+                <select
+                  value={customRoleForm.baseRole}
+                  disabled={Boolean(editingCustomRole)}
+                  onChange={(e) => {
+                    const role = e.target.value as RoleKey;
+                    setCustomRoleForm({
+                      ...customRoleForm,
+                      baseRole: role,
+                      modulePermissions: buildDefaultModulePerms(role),
+                    });
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#0A0E1A]"
+                >
+                  {ROLE_CATALOG.filter((r) => r.key !== 'sys_owner' && r.key !== 'owner').map((r) => (
+                    <option key={r.key} value={r.key}>
+                      {r.labelAr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="font-semibold block mb-1">وصف الدور ومهامه</label>
+              <input
+                value={customRoleForm.descriptionAr}
+                onChange={(e) => setCustomRoleForm({ ...customRoleForm, descriptionAr: e.target.value })}
+                placeholder="وصف مختصر لمسؤوليات هذا الدور..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-transparent"
+              />
+            </div>
+
+            <div className="rounded-xl border border-slate-200 dark:border-white/10 overflow-x-auto max-h-72">
+              <table className="w-full text-start text-[11px]">
+                <thead className="bg-slate-50 dark:bg-white/[0.03] text-slate-500 border-b border-slate-200 dark:border-white/10 sticky top-0">
+                  <tr>
+                    <th className="py-2 px-3 text-start">القسم</th>
+                    {LEVEL_META.map((lv) => (
+                      <th key={lv.key} className="py-2 px-2 text-center">
+                        {lv.labelAr}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-white/5">
+                  {MODULE_META.map((m) => {
+                    const levels = customRoleForm.modulePermissions[m.key] || [];
+                    return (
+                      <tr key={m.key}>
+                        <td className="py-1.5 px-3 font-medium whitespace-nowrap">{m.labelAr}</td>
+                        {LEVEL_META.map((lv) => (
+                          <td key={lv.key} className="py-1.5 px-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={levels.includes(lv.key)}
+                              onChange={() => {
+                                const next = levels.includes(lv.key)
+                                  ? levels.filter((a) => a !== lv.key)
+                                  : [...levels, lv.key];
+                                setCustomRoleForm((prev) => ({
+                                  ...prev,
+                                  modulePermissions: { ...prev.modulePermissions, [m.key]: next },
+                                }));
+                              }}
+                              className="w-3.5 h-3.5 accent-[#26478D]"
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCustomRoleModal(false)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={savingCustomRole}
+                className="px-5 py-2 rounded-xl bg-[#26478D] text-white font-semibold cursor-pointer"
+              >
+                {savingCustomRole ? '...' : editingCustomRole ? 'حفظ تعديلات الدور' : 'إنشاء الدور المخصص'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* CONFIRM DELETE CUSTOM ROLE */}
+      {confirmDeleteRoleId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] p-5 space-y-4 text-xs">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold">تأكيد حذف الدور المخصص</h3>
+              <UnifiedModalCloseButton onClick={() => setConfirmDeleteRoleId(null)} lang={lang} />
+            </div>
+            <p className="text-slate-600 dark:text-slate-300">
+              هل تريد حذف هذا الدور المخصص؟ لا يمكن الحذف إذا كان هناك موظفون مرتبطون به حالياً.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteRoleId(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-white/10 cursor-pointer"
+              >
+                تراجع
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteCustomRole(confirmDeleteRoleId)}
+                className="px-4 py-2 rounded-xl bg-red-600 text-white font-semibold cursor-pointer"
+              >
+                حذف الدور
+              </button>
             </div>
           </div>
         </div>

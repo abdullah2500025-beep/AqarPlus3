@@ -33,6 +33,7 @@ import { CameraDocumentScannerModal } from './CameraDocumentScannerModal';
 import { ProcessedScanResult } from '../utils/documentScanProcessor';
 import { TenantDossierModal } from './TenantDossierModal';
 import { LeadCenterPanel } from './LeadCenterPanel';
+import { UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 
 const TODAY_ISO = '2026-11-14';
 const CURRENT_MONTH_PREFIX = '2026-11';
@@ -59,7 +60,7 @@ function daysBetween(fromIso: string, toIso: string): number {
 }
 
 export function TenantsCrmView() {
-  const { state, currentUser, lang, hasPermission, mutate, pushToast, setActiveNav, tenantsTabHint, setTenantsTabHint } = useAqar();
+  const { state, currentUser, lang, hasPermission, hasModulePermission, mutate, pushToast, setActiveNav, tenantsTabHint, setTenantsTabHint } = useAqar();
   const [tab, setTab] = useState<'tenants' | 'leads' | 'reports'>(tenantsTabHint || 'tenants');
   const [leadsViewMode, setLeadsViewMode] = useState<'leads' | 'inbox'>(
     currentUser?.role === 'owner' ? 'inbox' : 'leads'
@@ -67,6 +68,9 @@ export function TenantsCrmView() {
   const [showAddLeadModal, setShowAddLeadModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [quickFilter, setQuickFilter] = useState<QuickTenantFilter>('all');
+
+  const canCreateTenant = hasModulePermission('tenants', 'create') || hasPermission('manage_tenants');
+  const canCreateLead = canCreateTenant || hasModulePermission('contracts', 'create') || hasPermission('manage_contracts');
 
   useEffect(() => {
     if (tenantsTabHint) {
@@ -85,6 +89,7 @@ export function TenantsCrmView() {
   const [showAddTenant, setShowAddTenant] = useState(false);
   const [isTenantOcrBusy, setIsTenantOcrBusy] = useState(false);
   const [showTenantCamera, setShowTenantCamera] = useState(false);
+  useEscapeKey(showAddTenant && !showTenantCamera, () => setShowAddTenant(false));
   const [scannedTenantDoc, setScannedTenantDoc] = useState<{
     dataUrl: string;
     mimeType: string;
@@ -370,7 +375,7 @@ export function TenantsCrmView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {hasPermission('manage_tenants') && tab === 'tenants' && (
+          {canCreateTenant && tab === 'tenants' && (
             <button
               type="button"
               onClick={() => setShowAddTenant(true)}
@@ -416,7 +421,7 @@ export function TenantsCrmView() {
                 <QrCode className="w-3.5 h-3.5 text-blue-300" />
                 <span>{isAr ? 'رابط التسجيل و QR' : 'Public Link & QR'}</span>
               </button>
-              {(hasPermission('manage_contracts') || hasPermission('manage_tenants')) && (
+              {canCreateLead && (
                 <button
                   type="button"
                   onClick={() => setShowAddLeadModal(true)}
@@ -795,9 +800,7 @@ export function TenantsCrmView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">{isAr ? 'تسجيل ملف مستأجر جديد' : 'New Tenant Profile'}</h3>
-              <button type="button" onClick={() => setShowAddTenant(false)} className="cursor-pointer text-slate-300">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowAddTenant(false)} lang={lang} />
             </div>
 
             {/* Gemini OCR Auto-Fill Strip */}

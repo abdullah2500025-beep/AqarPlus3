@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import {
+  AccountStatus,
   AqarDatabaseState,
   ArchiveCategoryId,
   AuditLog,
@@ -13,8 +14,11 @@ import {
   CompanyProfile,
   CompanySettings,
   CurrencyCode,
+  CustomRoleDefinition,
   DocumentAccessEntry,
   DocumentRecord,
+  EmployeeInvitation,
+  EmployeeInviteChannel,
   ExecutiveDecision,
   Expense,
   FavoriteReportPreset,
@@ -77,8 +81,26 @@ import {
   decryptBackupPayload,
   encryptBackupPayload,
   isEncryptedBackupEnvelope,
+  sha256Hex,
 } from './cryptoAuth';
-import { SqlitePersistence } from './sqlitePersistence';
+import { RecoveryPurpose, SqlitePersistence } from './sqlitePersistence';
+import {
+  buildAllDefaultRoleModulePermissions,
+  deriveLegacyPermissionsFromModules,
+  getDefaultModulePermissionsForRole,
+  getEffectiveModulePermissions,
+  ROLE_TEMPLATES,
+  userHasLegacyPermission,
+  userHasModuleAction,
+} from '../src/utils/rbac';
+
+export class PermissionDeniedError extends Error {
+  public readonly statusCode = 403;
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermissionDeniedError';
+  }
+}
 
 const RATES_TO_SAR: Record<CurrencyCode, number> = {
   SAR: 1,
@@ -183,7 +205,9 @@ export class AqarStore {
       this.state = this.initializeProvisionedWorkspace(provision);
     } else {
       this.state = this.loadInitialState();
-      this.sqlite.ensureSeedCredentials(this.state.users);
+      this.sqlite.ensureSeedCredentials(
+        this.state.users.filter((u) => u.accountStatus !== 'بانتظار التفعيل')
+      );
     }
     this.rebuildIndexes();
   }
@@ -196,9 +220,48 @@ export class AqarStore {
     return this.sqlite.getOrCreateSessionSecret();
   }
 
+  private normalizePhoneKey(raw: string): string {
+    const digits = (raw || '').replace(/[^\d]/g, '');
+    if (digits.length >= 9) {
+      return digits.slice(-9);
+    }
+    return digits;
+  }
+
+  private findUserByLoginIdentifier(identifier: string): StaffUser | undefined {
+    const raw = (identifier || '').trim();
+    const norm = raw.toLowerCase();
+    if (!norm) return undefined;
+    const phoneKey = this.normalizePhoneKey(raw);
+    return this.state.users.find(
+      (u) =>
+        u.id.toLowerCase() === norm ||
+        u.email.toLowerCase() === norm ||
+        (u.username && u.username.toLowerCase() === norm) ||
+        u.phone === raw ||
+        (phoneKey.length >= 9 && this.normalizePhoneKey(u.phone) === phoneKey)
+    );
+  }
+
+  private assertAccountLoginAllowed(user: StaffUser): void {
+    const status = user.accountStatus || (user.active ? 'نشط' : 'موقوف');
+    if (status === 'بانتظار التفعيل') {
+      throw new Error('حسابك بانتظار التفعيل — يرجى فتح رابط الدعوة وإكمال إعداد كلمة المرور أولاً');
+    }
+    if (status === 'مرفوض') {
+      throw new Error('تم رفض طلب تفعيل هذا الحساب من قِبل الإدارة');
+    }
+    if (status === 'منتهي الوصول') {
+      throw new Error('انتهت صلاحية وصول هذا الحساب إلى الشركة');
+    }
+    if (!user.active || status === 'موقوف') {
+      throw new Error('تم إيقاف هذا الحساب من قِبل الإدارة');
+    }
+  }
+
   public getLoginProfiles(): LoginProfileSummary[] {
     return this.state.users
-      .filter((u) => u.active)
+      .filter((u) => u.active && (!u.accountStatus || u.accountStatus === 'نشط'))
       .map((u) => ({
         id: u.id,
         nameAr: u.nameAr,
@@ -207,21 +270,24 @@ export class AqarStore {
         role: u.role,
         roleLabelAr: u.roleLabelAr,
         roleLabelEn: u.roleLabelEn,
-        hasPin: this.sqlite.getCredentialStatus(u.id).hasPin,
+        hasPin: u.security?.pinEnabled !== false && this.sqlite.getCredentialStatus(u.id).hasPin,
       }));
   }
 
-  public authenticatePassword(identifier: string, password: string, deviceName?: string): StaffUser {
-    const norm = (identifier || '').trim().toLowerCase();
-    const user = this.state.users.find(
-      (u) => u.id.toLowerCase() === norm || u.email.toLowerCase() === norm || u.phone === identifier.trim()
-    );
+  public hasUserWithIdentifier(identifier: string): StaffUser | undefined {
+    return this.findUserByLoginIdentifier(identifier);
+  }
+
+  public authenticatePasswordDetailed(
+    identifier: string,
+    password: string,
+    deviceName?: string
+  ): { user: StaffUser; hadSuspiciousFailures: boolean } {
+    const user = this.findUserByLoginIdentifier(identifier);
     if (!user) {
       throw new Error('بيانات الدخول غير صحيحة');
     }
-    if (!user.active) {
-      throw new Error('تم إيقاف هذا الحساب من قِبل الإدارة');
-    }
+    this.assertAccountLoginAllowed(user);
     if (user.security?.lockedUntil && new Date(user.security.lockedUntil).getTime() > Date.now()) {
       const waitSec = Math.ceil((new Date(user.security.lockedUntil).getTime() - Date.now()) / 1000);
       throw new Error(`تم قفل الحساب مؤقتاً لكثرة المحاولات الخاطئة. حاول بعد ${waitSec} ثانية.`);
@@ -239,13 +305,20 @@ export class AqarStore {
         success: false,
       });
       this.persist();
-      throw new Error('كلمة المرور غير صحيحة');
+      throw new Error('بيانات الدخول غير صحيحة');
     }
+    const hadSuspiciousFailures = (user.security?.failedAttempts || 0) >= 3;
     if (user.security) {
       user.security.failedAttempts = 0;
       user.security.lockedUntil = undefined;
+      user.security.pinFailedAttempts = 0;
+      user.security.pinLockedUntil = undefined;
+      user.security.requirePasswordAfterPinLock = false;
     }
+    const now = new Date().toISOString();
     user.statusState = 'متصل';
+    user.lastLoginAt = now;
+    user.lastActiveAt = now;
     this.recordLoginEvent({
       userId: user.id,
       deviceName: deviceName || user.deviceName,
@@ -253,26 +326,44 @@ export class AqarStore {
       success: true,
     });
     this.persist();
-    return user;
+    return { user, hadSuspiciousFailures };
+  }
+
+  public authenticatePassword(identifier: string, password: string, deviceName?: string): StaffUser {
+    return this.authenticatePasswordDetailed(identifier, password, deviceName).user;
   }
 
   public authenticatePin(userIdOrIdentifier: string, pin: string, deviceName?: string): StaffUser {
-    const norm = (userIdOrIdentifier || '').trim().toLowerCase();
-    const user = this.state.users.find(
-      (u) => u.id.toLowerCase() === norm || u.email.toLowerCase() === norm || u.phone === userIdOrIdentifier.trim()
-    );
-    if (!user || !user.active) {
-      throw new Error('الحساب غير متاح أو موقوف');
+    const user = this.findUserByLoginIdentifier(userIdOrIdentifier);
+    if (!user) {
+      throw new Error('بيانات الدخول أو رمز PIN غير صحيحة');
+    }
+    this.assertAccountLoginAllowed(user);
+    if (user.security?.pinEnabled === false || !this.sqlite.getCredentialStatus(user.id).hasPin) {
+      throw new Error('الدخول برمز PIN معطّل لهذا الحساب — استخدم كلمة المرور');
+    }
+    if (user.security?.requirePasswordAfterPinLock) {
+      throw new Error('تم إيقاف رمز PIN مؤقتاً لكثرة المحاولات الخاطئة — سجّل الدخول بكلمة المرور أولاً');
     }
     if (user.security?.lockedUntil && new Date(user.security.lockedUntil).getTime() > Date.now()) {
       const waitSec = Math.ceil((new Date(user.security.lockedUntil).getTime() - Date.now()) / 1000);
       throw new Error(`تم قفل الحساب مؤقتاً لكثرة المحاولات الخاطئة. حاول بعد ${waitSec} ثانية.`);
     }
-    if (!this.sqlite.verifyUserPin(user.id, pin)) {
+    if (user.security?.pinLockedUntil && new Date(user.security.pinLockedUntil).getTime() > Date.now()) {
+      const waitSec = Math.ceil((new Date(user.security.pinLockedUntil).getTime() - Date.now()) / 1000);
+      throw new Error(`يرجى الانتظار ${waitSec} ثانية قبل إعادة إدخال رمز PIN.`);
+    }
+    if (!/^\d{4,6}$/.test(pin) || !this.sqlite.verifyUserPin(user.id, pin)) {
       if (!user.security) user.security = {};
-      user.security.failedAttempts = (user.security.failedAttempts || 0) + 1;
-      if (user.security.failedAttempts >= 5) {
-        user.security.lockedUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      user.security.pinFailedAttempts = (user.security.pinFailedAttempts || 0) + 1;
+      const fails = user.security.pinFailedAttempts;
+      if (fails >= 5) {
+        user.security.pinLockedUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+        user.security.requirePasswordAfterPinLock = true;
+      } else if (fails === 4) {
+        user.security.pinLockedUntil = new Date(Date.now() + 120 * 1000).toISOString();
+      } else if (fails === 3) {
+        user.security.pinLockedUntil = new Date(Date.now() + 30 * 1000).toISOString();
       }
       this.recordLoginEvent({
         userId: user.id,
@@ -281,13 +372,22 @@ export class AqarStore {
         success: false,
       });
       this.persist();
+      if (fails >= 5) {
+        throw new Error('تم تجاوز محاولات PIN المسموحة — سجّل الدخول بكلمة المرور للمتابعة');
+      }
       throw new Error('رمز الدخول السريع (PIN) غير صحيح');
     }
     if (user.security) {
       user.security.failedAttempts = 0;
       user.security.lockedUntil = undefined;
+      user.security.pinFailedAttempts = 0;
+      user.security.pinLockedUntil = undefined;
+      user.security.requirePasswordAfterPinLock = false;
     }
+    const now = new Date().toISOString();
     user.statusState = 'متصل';
+    user.lastLoginAt = now;
+    user.lastActiveAt = now;
     this.recordLoginEvent({
       userId: user.id,
       deviceName: deviceName || user.deviceName,
@@ -301,21 +401,26 @@ export class AqarStore {
   public updateUserCredentials(
     actorUserId: string,
     targetUserId: string,
-    input: { currentPassword?: string; newPassword?: string; newPin?: string },
+    input: { currentPassword?: string; currentPin?: string; newPassword?: string; newPin?: string },
     deviceName?: string
-  ): void {
+  ): { revokedOtherSessions: number } {
     const actor = this.getActingUser(actorUserId);
     const isSelf = actor.id === targetUserId;
     if (!isSelf && actor.role !== 'sys_owner') {
-      throw new Error('تعديل بيانات دخول موظف آخر حصري لمالك النظام');
+      throw new PermissionDeniedError('تعديل بيانات دخول موظف آخر حصري لمالك النظام');
     }
-    if (isSelf && input.newPassword && input.currentPassword !== undefined) {
-      if (!this.sqlite.verifyUserPassword(actor.id, input.currentPassword)) {
+    if (isSelf && input.newPassword) {
+      if (!input.currentPassword || !this.sqlite.verifyUserPassword(actor.id, input.currentPassword)) {
         throw new Error('كلمة المرور الحالية غير صحيحة');
       }
     }
-    if (input.newPassword && input.newPassword.length < 6) {
-      throw new Error('كلمة المرور الجديدة يجب أن لا تقل عن 6 أحرف');
+    if (isSelf && input.newPin && input.currentPin !== undefined) {
+      if (!this.sqlite.verifyUserPin(actor.id, input.currentPin)) {
+        throw new Error('رمز PIN الحالي غير صحيح');
+      }
+    }
+    if (input.newPassword && input.newPassword.length < 8) {
+      throw new Error('كلمة المرور الجديدة يجب أن لا تقل عن 8 أحرف');
     }
     if (input.newPin && !/^\d{4,6}$/.test(input.newPin)) {
       throw new Error('رمز الدخول السريع (PIN) يجب أن يتكون من 4 إلى 6 أرقام');
@@ -328,6 +433,7 @@ export class AqarStore {
     if (target) {
       target.security = {
         ...(target.security || {}),
+        hasPin: input.newPin ? true : target.security?.hasPin,
         lastPasswordChangedAt: new Date().toISOString(),
         tempPasswordSet: !isSelf,
       };
@@ -341,6 +447,7 @@ export class AqarStore {
       { deviceName }
     );
     this.persist();
+    return { revokedOtherSessions: 0 };
   }
 
   public bumpEntityRevision(entityKey: string): number {
@@ -398,15 +505,31 @@ export class AqarStore {
           ...seed.users.filter((su) => !parsedUsers.some((pu) => pu.id === su.id)),
         ]
       : parsedUsers;
+    const defaultCompanyId = this.getWorkspaceCompanyId(parsed.companies || seed.companies);
+    const normalizedUsers: StaffUser[] = mergedUsers.map((u) => ({
+      ...u,
+      companyId: u.companyId || defaultCompanyId,
+      username: u.username || (u.email ? u.email.split('@')[0].toLowerCase() : u.id),
+      accountStatus: u.accountStatus || (u.active ? 'نشط' : 'موقوف'),
+      createdAt: u.createdAt || u.lastActiveAt,
+      joinedAt: u.joinedAt || (u.active ? u.createdAt || u.lastActiveAt : undefined),
+    }));
     const mergedRolePermissions: Record<RoleKey, PermissionKey[]> = {
       ...DEFAULT_ROLE_PERMISSIONS,
       ...(parsed.rolePermissions || {}),
     };
+    const mergedRoleModulePermissions = {
+      ...buildAllDefaultRoleModulePermissions(),
+      ...(parsed.roleModulePermissions || {}),
+    };
     return {
       ...seed,
       ...parsed,
-      users: mergedUsers,
+      users: normalizedUsers,
+      employeeInvitations: Array.isArray(parsed.employeeInvitations) ? parsed.employeeInvitations : [],
+      customRoles: Array.isArray(parsed.customRoles) ? parsed.customRoles : [],
       rolePermissions: mergedRolePermissions,
+      roleModulePermissions: mergedRoleModulePermissions,
       properties: parsedProperties,
       units: shouldSeedArchive ? mergeMissingById(parsed.units || [], seed.units) : parsed.units || seed.units,
       payments: shouldSeedArchive ? mergeMissingById(parsed.payments || [], seed.payments) : parsed.payments || seed.payments,
@@ -555,6 +678,9 @@ export class AqarStore {
       companyId: `comp-${this.workspaceId}`,
       nameAr: input.adminNameAr.trim(),
       nameEn: input.adminNameAr.trim(),
+      username: input.adminEmail.trim().toLowerCase().split('@')[0],
+      jobTitle: 'مالك النظام والمدير العام',
+      department: 'الإدارة العليا',
       email: input.adminEmail.trim().toLowerCase(),
       phone: (input.adminPhone || '').trim(),
       role: 'sys_owner',
@@ -563,8 +689,12 @@ export class AqarStore {
       approvalLimitSar: 10000000,
       deviceName: input.deviceName || 'Web Terminal',
       lastActiveAt: now,
+      lastLoginAt: now,
+      joinedAt: now,
+      createdAt: now,
       statusState: 'متصل',
       active: true,
+      accountStatus: 'نشط',
       security: {
         hasPin: Boolean(input.pin),
         lastPasswordChangedAt: now,
@@ -628,9 +758,12 @@ export class AqarStore {
       loginHistory: [],
       syncConflicts: [],
       zatcaInvoices: [],
+      employeeInvitations: [],
+      customRoles: [],
       archiveSeeded: true,
       teamSeeded: true,
       rolePermissions: JSON.parse(JSON.stringify(DEFAULT_ROLE_PERMISSIONS)),
+      roleModulePermissions: buildAllDefaultRoleModulePermissions(),
       counters: {
         receipt: 0,
         expense: 0,
@@ -695,43 +828,89 @@ export class AqarStore {
     return this.state;
   }
 
+  private getWorkspaceCompanyId(companies = this.state?.companies): string {
+    const def = (companies || []).find((c) => c.isDefault) || (companies || [])[0];
+    return def?.id || `comp-${this.workspaceId}`;
+  }
+
+  public getCompanySummary(): { id: string; nameAr: string; nameEn: string; logoDataUrl?: string } {
+    const def = (this.state.companies || []).find((c) => c.isDefault) || (this.state.companies || [])[0];
+    return {
+      id: def?.id || `comp-${this.workspaceId}`,
+      nameAr: this.state.settings?.nameAr || def?.nameAr || 'AqarPlus',
+      nameEn: this.state.settings?.nameEn || def?.nameEn || 'AqarPlus',
+      logoDataUrl: this.state.settings?.logoDataUrl,
+    };
+  }
+
   private sanitizeUsersForActor(actor: StaffUser): StaffUser[] {
-    const canManageUsers = this.userHasPermission(actor, 'manage_users');
+    const canManageUsers =
+      this.userHasPermission(actor, 'manage_users') ||
+      userHasModuleAction(this.state, actor, 'team', 'view');
     if (canManageUsers) {
       return this.state.users;
     }
-    return this.state.users.map((u) => ({
-      id: u.id,
-      nameAr: u.nameAr,
-      nameEn: u.nameEn,
-      role: u.role,
-      roleLabelAr: u.roleLabelAr,
-      roleLabelEn: u.roleLabelEn,
-      email: u.id === actor.id ? u.email : '',
-      phone: u.id === actor.id ? u.phone : '',
-      approvalLimitSar: u.id === actor.id ? u.approvalLimitSar : 0,
-      active: u.active,
-      ownerId: u.id === actor.id ? u.ownerId : undefined,
-      deviceName: u.id === actor.id ? u.deviceName : '',
-      lastActiveAt: u.lastActiveAt,
-      statusState: u.statusState,
-      specialty: u.specialty,
-      notificationPrefs: u.id === actor.id ? u.notificationPrefs : undefined,
-    }));
+    return this.state.users.map((u) => {
+      const isSelf = u.id === actor.id;
+      return {
+        id: u.id,
+        companyId: u.companyId,
+        nameAr: u.nameAr,
+        nameEn: u.nameEn,
+        username: isSelf ? u.username : undefined,
+        jobTitle: u.jobTitle,
+        department: u.department,
+        role: u.role,
+        roleLabelAr: u.roleLabelAr,
+        roleLabelEn: u.roleLabelEn,
+        customRoleId: isSelf ? u.customRoleId : undefined,
+        email: isSelf ? u.email : '',
+        phone: isSelf ? u.phone : '',
+        secondaryPhone: isSelf ? u.secondaryPhone : undefined,
+        approvalLimitSar: isSelf ? u.approvalLimitSar : 0,
+        active: u.active,
+        accountStatus: u.accountStatus,
+        ownerId: isSelf ? u.ownerId : undefined,
+        deviceName: isSelf ? u.deviceName : '',
+        lastActiveAt: u.lastActiveAt,
+        lastLoginAt: isSelf ? u.lastLoginAt : undefined,
+        joinedAt: isSelf ? u.joinedAt : undefined,
+        createdAt: isSelf ? u.createdAt : undefined,
+        statusState: u.statusState,
+        specialty: u.specialty,
+        avatarDataUrl: u.avatarDataUrl,
+        allowedPropertyIds: isSelf ? u.allowedPropertyIds : undefined,
+        customModulePermissions: isSelf ? u.customModulePermissions : undefined,
+        security: isSelf ? u.security : undefined,
+        notificationPrefs: isSelf ? u.notificationPrefs : undefined,
+        pendingEmailVerification: isSelf ? u.pendingEmailVerification : undefined,
+        pendingPhoneVerification: isSelf ? u.pendingPhoneVerification : undefined,
+      };
+    });
   }
 
   public getStateForUser(userId?: string): AqarDatabaseState {
     if (!userId) {
       throw new Error('يجب تسجيل الدخول للوصول إلى البيانات');
     }
-    const user = this.state.users.find((u) => u.id === userId && u.active);
+    const user = this.state.users.find(
+      (u) => u.id === userId && u.active && (!u.accountStatus || u.accountStatus === 'نشط')
+    );
     if (!user) {
       throw new Error('المستخدم غير مصرح له أو موقوف');
     }
 
-    const canViewAudit = this.userHasPermission(user, 'view_audit');
-    const canBackup = this.userHasPermission(user, 'backup_restore');
+    const canViewAudit =
+      this.userHasPermission(user, 'view_audit') ||
+      userHasModuleAction(this.state, user, 'audit', 'view');
+    const canBackup =
+      this.userHasPermission(user, 'backup_restore') ||
+      userHasModuleAction(this.state, user, 'backups', 'view');
+    const canViewTeam =
+      this.userHasPermission(user, 'manage_users') ||
+      userHasModuleAction(this.state, user, 'team', 'view');
     const sanitizedUsers = this.sanitizeUsersForActor(user);
+    const visibleInvitations = canViewTeam ? (this.state.employeeInvitations || []) : [];
 
     // Property-level isolation for staff members when allowedPropertyIds is restricted
     if (user.role !== 'owner' && user.role !== 'gm' && user.role !== 'sys_owner') {
@@ -746,6 +925,7 @@ export class AqarStore {
         return {
           ...this.state,
           users: sanitizedUsers,
+          employeeInvitations: visibleInvitations,
           auditLogs: canViewAudit
             ? this.state.auditLogs.filter((a) => !a.propertyId || propSet.has(a.propertyId))
             : [],
@@ -779,6 +959,7 @@ export class AqarStore {
       return {
         ...this.state,
         users: sanitizedUsers,
+        employeeInvitations: visibleInvitations,
         auditLogs: canViewAudit ? this.state.auditLogs : [],
         loginHistory: canViewAudit ? this.state.loginHistory : [],
         backups: canBackup ? this.state.backups : [],
@@ -789,6 +970,7 @@ export class AqarStore {
       return {
         ...this.state,
         users: sanitizedUsers,
+        employeeInvitations: visibleInvitations,
         auditLogs: canViewAudit ? this.state.auditLogs : [],
         loginHistory: canViewAudit ? this.state.loginHistory : [],
         backups: canBackup ? this.state.backups : [],
@@ -813,6 +995,7 @@ export class AqarStore {
     return {
       ...this.state,
       users: sanitizedUsers,
+      employeeInvitations: [],
       properties: this.state.properties.filter((p) => ownedPropIds.has(p.id)),
       units: this.state.units.filter((u) => ownedUnitIds.has(u.id)),
       contracts: this.state.contracts.filter((c) => ownedContractIds.has(c.id)),
@@ -842,21 +1025,29 @@ export class AqarStore {
   }
 
   private getActingUser(userId: string): StaffUser {
-    const user = this.state.users.find((u) => u.id === userId && u.active);
+    const user = this.state.users.find(
+      (u) => u.id === userId && u.active && (!u.accountStatus || u.accountStatus === 'نشط')
+    );
     if (!user) throw new Error('المستخدم غير موجود أو موقوف');
     return user;
   }
 
   private userHasPermission(user: StaffUser, permission: PermissionKey): boolean {
-    const perms = this.state.rolePermissions[user.role] || [];
-    return perms.includes('view_all') || perms.includes(permission);
+    return userHasLegacyPermission(this.state, user, permission);
   }
 
   private assertPermission(userId: string, permission: PermissionKey): StaffUser {
     const user = this.getActingUser(userId);
-    const perms = this.state.rolePermissions[user.role] || [];
-    if (!perms.includes(permission)) {
-      throw new Error(`لا تملك صلاحية تنفيذ هذا الإجراء (${permission})`);
+    if (!this.userHasPermission(user, permission)) {
+      throw new PermissionDeniedError(`لا تملك صلاحية تنفيذ هذا الإجراء (${permission})`);
+    }
+    return user;
+  }
+
+  public assertModuleAction(userId: string, module: PermissionModuleKey, action: PermissionLevel = 'view'): StaffUser {
+    const user = this.getActingUser(userId);
+    if (!userHasModuleAction(this.state, user, module, action)) {
+      throw new PermissionDeniedError(`لا تملك صلاحية (${action}) على قسم (${module})`);
     }
     return user;
   }
@@ -6294,6 +6485,1389 @@ export class AqarStore {
       archiveFilesSynced,
       documentsSynced,
       status: this.getStorageStatus(),
+    };
+  }
+
+  // 22. Employee Invitations, Workforce Lifecycle, Custom Roles, Profile & Credential Recovery
+
+  private isLocalSimulationAllowed(): boolean {
+    return process.env.NODE_ENV !== 'production' || process.env.AQAR_LOCAL_RECOVERY_PREVIEW === 'true';
+  }
+
+  private assertTeamManager(userId: string): StaffUser {
+    const actor = this.assertModuleAction(userId, 'team', 'manage');
+    if (actor.role !== 'sys_owner' && actor.role !== 'gm') {
+      throw new PermissionDeniedError('إدارة فريق العمل والدعوات متاحة لمالك النظام أو مدير الشركة فقط');
+    }
+    return actor;
+  }
+
+  private resolveRoleMeta(role: RoleKey, customRoleId?: string): { roleLabelAr: string; roleLabelEn: string } {
+    if (customRoleId && Array.isArray(this.state.customRoles)) {
+      const custom = this.state.customRoles.find((r) => r.id === customRoleId);
+      if (custom) {
+        return { roleLabelAr: custom.nameAr, roleLabelEn: custom.nameEn };
+      }
+    }
+    const tpl = ROLE_TEMPLATES.find((t) => t.key === role);
+    if (tpl) {
+      return { roleLabelAr: tpl.labelAr, roleLabelEn: tpl.labelEn };
+    }
+    return { roleLabelAr: 'موظف', roleLabelEn: 'Staff Member' };
+  }
+
+  private buildInviteDeliveryNotice(
+    channel: EmployeeInviteChannel,
+    recipientPhone: string,
+    recipientEmail: string,
+    inviteUrl: string,
+    verificationCode: string,
+    companyNameAr: string
+  ): { handoffUrl: string; externalGatewayConfigured: boolean; deliveryNotice: string } {
+    const cleanPhone = (recipientPhone || '').replace(/[^\d]/g, '');
+    const waPhone = cleanPhone.startsWith('05') ? `966${cleanPhone.slice(1)}` : cleanPhone;
+    const messageText = `مرحباً، ندعوك للانضمام إلى فريق ${companyNameAr} في نظام AqarPlus.\nرابط التفعيل:\n${inviteUrl}\nرمز التحقق: ${verificationCode}`;
+    const integrations = this.state.settings?.integrationsConfig;
+
+    if (channel === 'whatsapp') {
+      const externalGatewayConfigured = Boolean(integrations?.whatsappBusinessEnabled);
+      return {
+        handoffUrl: `https://wa.me/${waPhone}?text=${encodeURIComponent(messageText)}`,
+        externalGatewayConfigured,
+        deliveryNotice: externalGatewayConfigured
+          ? 'تم تجهيز الدعوة وإرسالها عبر بوابة واتساب الأعمال المتصلة.'
+          : 'تم توليد رابط الدعوة ورمز التحقق محلياً — استخدم زر فتح واتساب أو نسخ الرابط لإرساله للموظف (لا توجد بوابة WhatsApp API مفعّلة للإرسال الآلي).',
+      };
+    }
+    if (channel === 'email') {
+      const externalGatewayConfigured = Boolean(integrations?.smtpEnabled);
+      const subject = `دعوة انضمام إلى ${companyNameAr} — AqarPlus`;
+      return {
+        handoffUrl: `mailto:${encodeURIComponent(recipientEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(messageText)}`,
+        externalGatewayConfigured,
+        deliveryNotice: externalGatewayConfigured
+          ? 'تم تجهيز الدعوة وإرسالها عبر خادم البريد الإلكتروني (SMTP) المفعّل.'
+          : 'تم توليد رابط الدعوة ورمز التحقق محلياً — استخدم زر فتح البريد أو نسخ الرابط لإرساله للموظف (لا توجد إعدادات SMTP مفعّلة).',
+      };
+    }
+    if (channel === 'sms') {
+      const externalGatewayConfigured = Boolean(integrations?.smsGatewayEnabled);
+      return {
+        handoffUrl: `sms:${cleanPhone}?body=${encodeURIComponent(messageText)}`,
+        externalGatewayConfigured,
+        deliveryNotice: externalGatewayConfigured
+          ? 'تم إرسال رسالة الدعوة النصية عبر بوابة SMS المتصلة.'
+          : 'تم توليد رابط الدعوة ورمز التحقق محلياً — استخدم زر فتح الرسائل SMS أو نسخ الرابط لإرساله للموظف (لا توجد بوابة SMS مفعّلة).',
+      };
+    }
+    return {
+      handoffUrl: inviteUrl,
+      externalGatewayConfigured: false,
+      deliveryNotice: 'تم توليد رابط الدعوة ورمز التحقق المكون من 6 أرقام — انسخ الرابط والرمز وأرسلهما للموظف.',
+    };
+  }
+
+  public createEmployeeWithInvite(
+    actorUserId: string,
+    input: {
+      nameAr: string;
+      nameEn?: string;
+      jobTitle?: string;
+      department?: string;
+      phone: string;
+      secondaryPhone?: string;
+      email: string;
+      username?: string;
+      role: RoleKey;
+      customRoleId?: string;
+      customModulePermissions?: Partial<Record<PermissionModuleKey, PermissionLevel[]>>;
+      allowedPropertyIds?: string[];
+      approvalLimitSar?: number;
+      avatarDataUrl?: string;
+      channel: EmployeeInviteChannel;
+    },
+    originUrl: string,
+    deviceName?: string
+  ) {
+    return this.runTransaction(() => {
+      const actor = this.assertTeamManager(actorUserId);
+      if (!input.nameAr?.trim() || !input.phone?.trim() || !input.email?.trim()) {
+        throw new Error('الاسم الكامل، رقم الجوال الأساسي، والبريد الإلكتروني حقول مطلوبة');
+      }
+      const normEmail = input.email.trim().toLowerCase();
+      const normPhone = input.phone.trim();
+      const normUsername = input.username?.trim() ? input.username.trim().toLowerCase() : undefined;
+
+      if (actor.role === 'gm' && (input.role === 'sys_owner' || input.role === 'gm')) {
+        throw new PermissionDeniedError('إضافة مالك نظام أو مدير عام صلاحية حصرية لمالك النظام فقط');
+      }
+      if (this.state.users.some((u) => u.email.toLowerCase() === normEmail)) {
+        throw new Error('البريد الإلكتروني مستخدم بالفعل لحساب آخر داخل الشركة');
+      }
+      if (this.state.users.some((u) => u.phone === normPhone)) {
+        throw new Error('رقم الجوال الأساسي مسجل بالفعل لموظف آخر');
+      }
+      if (normUsername && this.state.users.some((u) => u.username?.toLowerCase() === normUsername)) {
+        throw new Error('اسم المستخدم مستخدم بالفعل — اختر اسماً آخر');
+      }
+      if (input.customRoleId) {
+        const customExists = (this.state.customRoles || []).some((r) => r.id === input.customRoleId);
+        if (!customExists) throw new Error('الدور المخصص المحدد غير موجود');
+      }
+
+      const companyId = this.getWorkspaceCompanyId();
+      const company = this.getCompanySummary();
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+      const meta = this.resolveRoleMeta(input.role, input.customRoleId);
+
+      const newUser: StaffUser = {
+        id: uid('usr'),
+        companyId,
+        nameAr: input.nameAr.trim(),
+        nameEn: (input.nameEn || input.nameAr).trim(),
+        username: normUsername,
+        jobTitle: input.jobTitle?.trim() || meta.roleLabelAr,
+        department: input.department?.trim() || 'الإدارة العامة',
+        role: input.role,
+        roleLabelAr: meta.roleLabelAr,
+        roleLabelEn: meta.roleLabelEn,
+        customRoleId: input.customRoleId,
+        email: normEmail,
+        phone: normPhone,
+        secondaryPhone: input.secondaryPhone?.trim() || undefined,
+        approvalLimitSar: Number(input.approvalLimitSar || 0),
+        active: false,
+        accountStatus: 'بانتظار التفعيل',
+        deviceName: 'بانتظار التفعيل عبر الدعوة',
+        lastActiveAt: now,
+        createdAt: now,
+        statusState: 'غير متصل',
+        specialty: input.jobTitle?.trim() || meta.roleLabelAr,
+        avatarDataUrl: input.avatarDataUrl,
+        allowedPropertyIds:
+          input.allowedPropertyIds && input.allowedPropertyIds.length > 0 ? input.allowedPropertyIds : undefined,
+        customModulePermissions: input.customModulePermissions,
+        managerRating: 5,
+        lastActivitySummary: 'تم إنشاء الحساب وإرسال دعوة التفعيل',
+        security: {
+          twoFactorEnabled: false,
+          biometricEnabled: false,
+          hasPin: false,
+          failedAttempts: 0,
+          lastPasswordChangedAt: undefined,
+          requirePasswordChange90d: true,
+          tempPasswordSet: false,
+        },
+        notificationPrefs: {
+          dndEnabled: false,
+          taskAssigned: true,
+          taskReminder: true,
+          taskApproved: true,
+          taskComment: true,
+          urgentTicket: true,
+        },
+      };
+
+      const rawToken = crypto.randomBytes(24).toString('hex');
+      const verificationCode = String(crypto.randomInt(100000, 1000000));
+      const invId = uid('inv');
+
+      this.sqlite.createInviteSecret({
+        invitationId: invId,
+        userId: newUser.id,
+        companyId,
+        rawToken,
+        verificationCode,
+        expiresAt,
+      });
+
+      const baseOrigin = (originUrl || '').replace(/\/+$/, '');
+      const inviteUrl = `${baseOrigin}/?inviteToken=${encodeURIComponent(rawToken)}&workspace=${encodeURIComponent(this.workspaceId)}`;
+      const channel: EmployeeInviteChannel = input.channel || 'copy_link';
+      const delivery = this.buildInviteDeliveryNotice(
+        channel,
+        newUser.phone,
+        newUser.email,
+        inviteUrl,
+        verificationCode,
+        company.nameAr
+      );
+
+      const invitation: EmployeeInvitation = {
+        id: invId,
+        userId: newUser.id,
+        companyId,
+        companyNameAr: company.nameAr,
+        fullName: newUser.nameAr,
+        jobTitle: newUser.jobTitle,
+        department: newUser.department,
+        email: newUser.email,
+        phone: newUser.phone,
+        secondaryPhone: newUser.secondaryPhone,
+        username: newUser.username,
+        role: newUser.role,
+        roleLabelAr: newUser.roleLabelAr,
+        customRoleId: newUser.customRoleId,
+        channel,
+        deliveryMode: delivery.externalGatewayConfigured ? 'gateway' : 'handoff',
+        deliveryNote: delivery.deliveryNotice,
+        status: 'بانتظار التفعيل',
+        tokenPreview: sha256Hex(rawToken).slice(0, 12),
+        invitedByUserId: actor.id,
+        invitedByName: actor.nameAr,
+        sentAt: now,
+        expiresAt,
+        resendCount: 0,
+      };
+
+      if (!Array.isArray(this.state.employeeInvitations)) {
+        this.state.employeeInvitations = [];
+      }
+      this.state.users.push(newUser);
+      this.state.employeeInvitations.unshift(invitation);
+
+      this.addAudit(
+        actor,
+        'إضافة موظف وإرسال دعوة انضمام',
+        'EmployeeInvitation',
+        invId,
+        `إضافة ${newUser.nameAr} (${newUser.roleLabelAr}) بحالة بانتظار التفعيل وإصدار دعوة عبر ${channel}`,
+        { newValue: 'بانتظار التفعيل', deviceName }
+      );
+      this.addNotification(
+        `دعوة موظف جديد: ${newUser.nameAr}`,
+        `New Employee Invite: ${newUser.nameEn}`,
+        `أصدر ${actor.nameAr} دعوة انضمام إلى ${newUser.nameAr} (${newUser.roleLabelAr}).`,
+        `${actor.nameEn} invited ${newUser.nameEn}.`,
+        'إدارية',
+        ['sys_owner', 'gm'],
+        'team'
+      );
+      this.persist();
+
+      return {
+        user: newUser,
+        invitation,
+        inviteUrl,
+        verificationCode,
+        handoffUrl: delivery.handoffUrl,
+        externalGatewayConfigured: delivery.externalGatewayConfigured,
+        deliveryNotice: delivery.deliveryNotice,
+      };
+    });
+  }
+
+  public resendEmployeeInvitation(
+    actorUserId: string,
+    invitationId: string,
+    channel: EmployeeInviteChannel | undefined,
+    originUrl: string,
+    deviceName?: string
+  ) {
+    return this.runTransaction(() => {
+      const actor = this.assertTeamManager(actorUserId);
+      const list = this.state.employeeInvitations || [];
+      const inv = list.find((item) => item.id === invitationId);
+      if (!inv) throw new Error('الدعوة المحددة غير موجودة');
+      if (inv.status === 'مقبولة') {
+        throw new Error('تم قبول هذه الدعوة وتفعيل الحساب مسبقاً');
+      }
+      const targetUser = this.state.users.find((u) => u.id === inv.userId);
+      if (!targetUser) throw new Error('حساب الموظف المرتبط بالدعوة غير موجود');
+      if (targetUser.accountStatus === 'مرفوض' || targetUser.accountStatus === 'منتهي الوصول') {
+        throw new Error('لا يمكن إعادة إرسال دعوة لحساب مرفوض أو منتهي الوصول');
+      }
+
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+      const rawToken = crypto.randomBytes(24).toString('hex');
+      const verificationCode = String(crypto.randomInt(100000, 1000000));
+      const nextChannel = channel || inv.channel || 'copy_link';
+      const company = this.getCompanySummary();
+
+      this.sqlite.cancelInviteSecret(inv.id);
+      this.sqlite.createInviteSecret({
+        invitationId: inv.id,
+        userId: targetUser.id,
+        companyId: inv.companyId || this.getWorkspaceCompanyId(),
+        rawToken,
+        verificationCode,
+        expiresAt,
+      });
+
+      const baseOrigin = (originUrl || '').replace(/\/+$/, '');
+      const inviteUrl = `${baseOrigin}/?inviteToken=${encodeURIComponent(rawToken)}&workspace=${encodeURIComponent(this.workspaceId)}`;
+      const delivery = this.buildInviteDeliveryNotice(
+        nextChannel,
+        targetUser.phone,
+        targetUser.email,
+        inviteUrl,
+        verificationCode,
+        company.nameAr
+      );
+
+      inv.channel = nextChannel;
+      inv.status = 'بانتظار التفعيل';
+      inv.deliveryMode = delivery.externalGatewayConfigured ? 'gateway' : 'handoff';
+      inv.deliveryNote = delivery.deliveryNotice;
+      inv.tokenPreview = sha256Hex(rawToken).slice(0, 12);
+      inv.sentAt = now;
+      inv.expiresAt = expiresAt;
+      inv.canceledAt = undefined;
+      inv.resendCount = (inv.resendCount || 0) + 1;
+
+      this.addAudit(
+        actor,
+        'إعادة إرسال دعوة موظف',
+        'EmployeeInvitation',
+        inv.id,
+        `إعادة إرسال دعوة الموظف ${targetUser.nameAr} عبر ${nextChannel} (المرة #${inv.resendCount})`,
+        { deviceName }
+      );
+      this.persist();
+
+      return {
+        invitation: inv,
+        inviteUrl,
+        verificationCode,
+        handoffUrl: delivery.handoffUrl,
+        externalGatewayConfigured: delivery.externalGatewayConfigured,
+        deliveryNotice: delivery.deliveryNotice,
+      };
+    });
+  }
+
+  public cancelEmployeeInvitation(actorUserId: string, invitationId: string, deviceName?: string) {
+    return this.runTransaction(() => {
+      const actor = this.assertTeamManager(actorUserId);
+      const list = this.state.employeeInvitations || [];
+      const inv = list.find((item) => item.id === invitationId);
+      if (!inv) throw new Error('الدعوة المحددة غير موجودة');
+      if (inv.status === 'مقبولة') {
+        throw new Error('لا يمكن إلغاء دعوة تم قبولها وتفعيلها بالفعل');
+      }
+      const now = new Date().toISOString();
+      this.sqlite.cancelInviteSecret(inv.id);
+      inv.status = 'ملغاة';
+      inv.canceledAt = now;
+
+      this.addAudit(
+        actor,
+        'إلغاء دعوة موظف',
+        'EmployeeInvitation',
+        inv.id,
+        `إلغاء دعوة الانضمام الموجهة إلى ${inv.fullName}`,
+        { oldValue: 'بانتظار التفعيل', newValue: 'ملغاة', deviceName }
+      );
+      this.persist();
+      return inv;
+    });
+  }
+
+  public getPublicInvitationByToken(rawToken: string): {
+    valid: boolean;
+    reason?: string;
+    expired?: boolean;
+    invitation?: EmployeeInvitation;
+    company: { id: string; nameAr: string; nameEn: string; logoDataUrl?: string };
+    invitee?: {
+      nameAr: string;
+      nameEn: string;
+      email: string;
+      phone: string;
+      username?: string;
+      jobTitle?: string;
+      department?: string;
+      roleLabelAr: string;
+      roleLabelEn: string;
+    };
+  } {
+    const company = this.getCompanySummary();
+    const secret = this.sqlite.findInviteSecretByToken(rawToken);
+    if (!secret) {
+      return { valid: false, reason: 'رابط الدعوة غير صالح أو منتهي', company };
+    }
+    const workspaceCompanyId = this.getWorkspaceCompanyId();
+    if (secret.companyId !== workspaceCompanyId) {
+      return { valid: false, reason: 'هذه الدعوة تخص شركة أخرى ولا تنتمي لمساحة العمل الحالية', company };
+    }
+    const inv = (this.state.employeeInvitations || []).find((i) => i.id === secret.invitationId);
+    const user = this.state.users.find((u) => u.id === secret.userId);
+    if (!inv || !user) {
+      return { valid: false, reason: 'ملف الدعوة أو الموظف لم يعد موجوداً', company };
+    }
+    if (secret.canceledAt || inv.status === 'ملغاة') {
+      return { valid: false, reason: 'تم إلغاء هذه الدعوة من قِبل مدير الشركة', invitation: inv, company };
+    }
+    if (secret.usedAt || inv.status === 'مقبولة') {
+      return { valid: false, reason: 'تم استخدام هذه الدعوة وتفعيل الحساب مسبقاً', invitation: inv, company };
+    }
+    if (Date.now() > new Date(secret.expiresAt).getTime()) {
+      inv.status = 'منتهية';
+      this.persist();
+      return {
+        valid: false,
+        expired: true,
+        reason: 'انتهت صلاحية رابط الدعوة — اطلب من مالك الشركة إعادة الإرسال',
+        invitation: inv,
+        company,
+      };
+    }
+    if (user.accountStatus === 'مرفوض' || user.accountStatus === 'منتهي الوصول') {
+      return { valid: false, reason: 'الحساب مرفوض أو منتهي الوصول', invitation: inv, company };
+    }
+    return {
+      valid: true,
+      invitation: inv,
+      company,
+      invitee: {
+        nameAr: user.nameAr,
+        nameEn: user.nameEn,
+        email: user.email,
+        phone: user.phone,
+        username: user.username,
+        jobTitle: user.jobTitle,
+        department: user.department,
+        roleLabelAr: user.roleLabelAr,
+        roleLabelEn: user.roleLabelEn,
+      },
+    };
+  }
+
+  public acceptEmployeeInvitation(
+    rawToken: string,
+    input: {
+      verificationCode: string;
+      password: string;
+      confirmPassword: string;
+      pin?: string;
+      acceptedTerms: boolean;
+      deviceName?: string;
+    }
+  ): { user: StaffUser; company: { id: string; nameAr: string; nameEn: string; logoDataUrl?: string } } {
+    return this.runTransaction(() => {
+      if (!input.acceptedTerms) {
+        throw new Error('يجب الموافقة على شروط الاستخدام وسياسة الصلاحيات لإتمام التفعيل');
+      }
+      if (!input.verificationCode?.trim()) {
+        throw new Error('يرجى إدخال رمز التحقق المكون من 6 أرقام');
+      }
+      if (!input.password || input.password.length < 8) {
+        throw new Error('كلمة المرور يجب أن لا تقل عن 8 أحرف');
+      }
+      if (input.password !== input.confirmPassword) {
+        throw new Error('كلمتا المرور غير متطابقتين');
+      }
+      if (input.pin && !/^\d{4,6}$/.test(input.pin)) {
+        throw new Error('رمز الدخول السريع (PIN) يجب أن يتكون من 4 إلى 6 أرقام');
+      }
+
+      const secretCheck = this.sqlite.findInviteSecretByToken(rawToken);
+      if (!secretCheck) {
+        throw new Error('رابط الدعوة غير صالح');
+      }
+      if (secretCheck.companyId !== this.getWorkspaceCompanyId()) {
+        throw new PermissionDeniedError('لا يمكن قبول دعوة تخص شركة أخرى');
+      }
+
+      const consumed = this.sqlite.verifyAndConsumeInviteSecret(rawToken, input.verificationCode);
+      if (!consumed.ok) {
+        if (consumed.expired) {
+          const expInv = (this.state.employeeInvitations || []).find((i) => i.id === secretCheck.invitationId);
+          if (expInv && expInv.status === 'بانتظار التفعيل') {
+            expInv.status = 'منتهية';
+            this.persist();
+          }
+        }
+        throw new Error(consumed.reason);
+      }
+
+      const user = this.state.users.find((u) => u.id === consumed.record.userId);
+      const inv = (this.state.employeeInvitations || []).find((i) => i.id === consumed.record.invitationId);
+      if (!user || !inv) {
+        throw new Error('ملف الموظف غير موجود');
+      }
+
+      this.sqlite.updateUserCredentials(user.id, {
+        password: input.password,
+        pin: input.pin || undefined,
+      });
+
+      const now = new Date().toISOString();
+      user.active = true;
+      user.accountStatus = 'نشط';
+      user.joinedAt = now;
+      user.lastActiveAt = now;
+      user.deviceName = input.deviceName || 'متصفح الويب · مفعّل عبر الدعوة';
+      user.statusState = 'متصل';
+      user.lastActivitySummary = 'تم قبول الدعوة وتفعيل الحساب الشخصي';
+      user.security = {
+        ...(user.security || {}),
+        hasPin: Boolean(input.pin),
+        failedAttempts: 0,
+        lockedUntil: undefined,
+        lastPasswordChangedAt: now,
+        tempPasswordSet: false,
+      };
+
+      inv.status = 'مقبولة';
+      inv.acceptedAt = now;
+
+      this.addAudit(
+        user,
+        'تفعيل حساب موظف عبر الدعوة',
+        'EmployeeInvitation',
+        inv.id,
+        `قام الموظف ${user.nameAr} بتفعيل حسابه وقبول شروط الشركة (${inv.roleLabelAr})`,
+        { oldValue: 'بانتظار التفعيل', newValue: 'نشط', deviceName: input.deviceName }
+      );
+      this.addNotification(
+        `انضمام موظف مفعّل: ${user.nameAr}`,
+        `Employee Activated: ${user.nameEn}`,
+        `أتم ${user.nameAr} (${user.roleLabelAr}) تفعيل حسابه عبر رابط الدعوة وأصبح نشطاً الآن.`,
+        `${user.nameEn} activated their account.`,
+        'إدارية',
+        ['sys_owner', 'gm'],
+        'team'
+      );
+      this.persist();
+
+      return { user, company: this.getCompanySummary() };
+    });
+  }
+
+  public updateEmployeeAdmin(
+    actorUserId: string,
+    targetUserId: string,
+    patch: {
+      nameAr?: string;
+      nameEn?: string;
+      jobTitle?: string;
+      department?: string;
+      phone?: string;
+      secondaryPhone?: string;
+      email?: string;
+      username?: string;
+      role?: RoleKey;
+      customRoleId?: string | null;
+      customModulePermissions?: Partial<Record<PermissionModuleKey, PermissionLevel[]>> | null;
+      allowedPropertyIds?: string[] | null;
+      approvalLimitSar?: number;
+      accountStatus?: AccountStatus;
+      terminationReason?: string;
+      avatarDataUrl?: string;
+    },
+    deviceName?: string
+  ): { user: StaffUser; terminateSessions: boolean } {
+    return this.runTransaction(() => {
+      const actor = this.assertTeamManager(actorUserId);
+      const target = this.state.users.find((u) => u.id === targetUserId);
+      if (!target) throw new Error('الموظف غير موجود');
+
+      const touchesGovernance =
+        patch.role !== undefined ||
+        patch.customRoleId !== undefined ||
+        patch.customModulePermissions !== undefined ||
+        patch.allowedPropertyIds !== undefined ||
+        patch.approvalLimitSar !== undefined ||
+        patch.accountStatus !== undefined;
+
+      if (actor.id === targetUserId && touchesGovernance) {
+        throw new PermissionDeniedError('لا يمكن لأي مستخدم تعديل دوره أو صلاحياته أو حالة حسابه بنفسه');
+      }
+      if (actor.role === 'gm' && (target.role === 'sys_owner' || target.role === 'gm')) {
+        throw new PermissionDeniedError('لا يملك مدير الشركة صلاحية تعديل حساب مالك النظام أو مدير شركة آخر');
+      }
+      if (actor.role === 'gm' && (patch.role === 'sys_owner' || patch.role === 'gm')) {
+        throw new PermissionDeniedError('ترقية موظف إلى مالك نظام أو مدير عام محصورة بمالك النظام فقط');
+      }
+
+      if (patch.email !== undefined) {
+        const normEmail = patch.email.trim().toLowerCase();
+        if (!normEmail) throw new Error('البريد الإلكتروني غير صالح');
+        if (this.state.users.some((u) => u.id !== targetUserId && u.email.toLowerCase() === normEmail)) {
+          throw new Error('البريد الإلكتروني مستخدم لحساب آخر');
+        }
+        target.email = normEmail;
+      }
+      if (patch.phone !== undefined) {
+        const normPhone = patch.phone.trim();
+        if (!normPhone) throw new Error('رقم الجوال الأساسي مطلوب');
+        if (this.state.users.some((u) => u.id !== targetUserId && u.phone === normPhone)) {
+          throw new Error('رقم الجوال مسجل لموظف آخر');
+        }
+        target.phone = normPhone;
+      }
+      if (patch.username !== undefined) {
+        const normUser = patch.username.trim().toLowerCase();
+        if (normUser && this.state.users.some((u) => u.id !== targetUserId && u.username?.toLowerCase() === normUser)) {
+          throw new Error('اسم المستخدم مستخدم بالفعل');
+        }
+        target.username = normUser || undefined;
+      }
+
+      if (patch.nameAr !== undefined && patch.nameAr.trim()) target.nameAr = patch.nameAr.trim();
+      if (patch.nameEn !== undefined) target.nameEn = patch.nameEn.trim() || target.nameAr;
+      // SECURITY INVARIANT: Changing jobTitle updates display title only and NEVER modifies permissions.
+      if (patch.jobTitle !== undefined) target.jobTitle = patch.jobTitle.trim();
+      if (patch.department !== undefined) target.department = patch.department.trim();
+      if (patch.secondaryPhone !== undefined) target.secondaryPhone = patch.secondaryPhone.trim() || undefined;
+      if (patch.avatarDataUrl !== undefined) target.avatarDataUrl = patch.avatarDataUrl || undefined;
+      if (patch.approvalLimitSar !== undefined) target.approvalLimitSar = Number(patch.approvalLimitSar || 0);
+
+      if (patch.allowedPropertyIds !== undefined) {
+        target.allowedPropertyIds =
+          patch.allowedPropertyIds && patch.allowedPropertyIds.length > 0 ? patch.allowedPropertyIds : undefined;
+      }
+      if (patch.customModulePermissions !== undefined) {
+        target.customModulePermissions = patch.customModulePermissions || undefined;
+      }
+      if (patch.customRoleId !== undefined) {
+        if (patch.customRoleId === null || patch.customRoleId === '') {
+          target.customRoleId = undefined;
+        } else {
+          const custom = (this.state.customRoles || []).find((r) => r.id === patch.customRoleId);
+          if (!custom) throw new Error('الدور المخصص غير موجود');
+          target.customRoleId = custom.id;
+          target.role = custom.baseRoleKey;
+          target.roleLabelAr = custom.nameAr;
+          target.roleLabelEn = custom.nameEn;
+        }
+      }
+      if (patch.role !== undefined && patch.role !== target.role) {
+        target.role = patch.role;
+        const meta = this.resolveRoleMeta(patch.role, target.customRoleId);
+        target.roleLabelAr = meta.roleLabelAr;
+        target.roleLabelEn = meta.roleLabelEn;
+      } else if (patch.role !== undefined && !patch.customRoleId && target.customRoleId === undefined) {
+        const meta = this.resolveRoleMeta(target.role, undefined);
+        target.roleLabelAr = meta.roleLabelAr;
+        target.roleLabelEn = meta.roleLabelEn;
+      }
+
+      let terminateSessions = false;
+      const prevStatus = target.accountStatus || (target.active ? 'نشط' : 'موقوف');
+      if (patch.accountStatus !== undefined) {
+        if (target.role === 'sys_owner' && patch.accountStatus !== 'نشط') {
+          const activeOwners = this.state.users.filter(
+            (u) => u.id !== target.id && u.role === 'sys_owner' && u.active && (!u.accountStatus || u.accountStatus === 'نشط')
+          );
+          if (activeOwners.length === 0) {
+            throw new Error('لا يمكن إيقاف مالك النظام الوحيد النشط في الشركة');
+          }
+        }
+        target.accountStatus = patch.accountStatus;
+        if (patch.accountStatus === 'نشط') {
+          target.active = true;
+          target.terminatedAt = undefined;
+          target.terminationReason = undefined;
+          if (!target.joinedAt) target.joinedAt = new Date().toISOString();
+        } else {
+          target.active = false;
+          target.statusState = 'غير متصل';
+          if (patch.accountStatus === 'موقوف' || patch.accountStatus === 'مرفوض' || patch.accountStatus === 'منتهي الوصول') {
+            target.terminatedAt = new Date().toISOString();
+            target.terminationReason = patch.terminationReason?.trim() || undefined;
+            this.sqlite.revokeOtherSessionsForUser(target.id);
+            terminateSessions = true;
+            // Cancel any open pending invitation when rejected/expired
+            if (patch.accountStatus === 'مرفوض' || patch.accountStatus === 'منتهي الوصول') {
+              for (const inv of this.state.employeeInvitations || []) {
+                if (inv.userId === target.id && inv.status === 'بانتظار التفعيل') {
+                  this.sqlite.cancelInviteSecret(inv.id);
+                  inv.status = 'ملغاة';
+                  inv.canceledAt = new Date().toISOString();
+                }
+              }
+            }
+          }
+        }
+      }
+
+      this.addAudit(
+        actor,
+        'تحديث ملف وصلاحيات موظف',
+        'StaffUser',
+        target.id,
+        `تعديل بيانات الموظف ${target.nameAr} (${target.roleLabelAr})${patch.accountStatus && patch.accountStatus !== prevStatus ? ` · الحالة: ${prevStatus} ← ${patch.accountStatus}` : ''}`,
+        { oldValue: prevStatus, newValue: target.accountStatus, reason: patch.terminationReason, deviceName }
+      );
+      this.persist();
+      return { user: target, terminateSessions };
+    });
+  }
+
+  public createCustomRole(
+    actorUserId: string,
+    input: {
+      nameAr: string;
+      nameEn?: string;
+      descriptionAr?: string;
+      baseRole?: RoleKey;
+      modulePermissions: Partial<Record<PermissionModuleKey, PermissionLevel[]>>;
+    },
+    deviceName?: string
+  ): CustomRoleDefinition {
+    const actor = this.assertTeamManager(actorUserId);
+    if (!input.nameAr?.trim()) throw new Error('اسم الدور الوظيفي المخصص مطلوب');
+    const now = new Date().toISOString();
+    const baseRoleKey: RoleKey =
+      input.baseRole && input.baseRole !== 'sys_owner' ? input.baseRole : 'leasing';
+    const modulePermissions = input.modulePermissions || getDefaultModulePermissionsForRole(baseRoleKey);
+    const roleDef: CustomRoleDefinition = {
+      id: uid('crole'),
+      companyId: this.getWorkspaceCompanyId(),
+      nameAr: input.nameAr.trim(),
+      nameEn: (input.nameEn || input.nameAr).trim(),
+      descriptionAr: input.descriptionAr?.trim() || '',
+      baseRoleKey,
+      legacyPermissions: deriveLegacyPermissionsFromModules(modulePermissions),
+      modulePermissions,
+      createdBy: actor.nameAr,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (!Array.isArray(this.state.customRoles)) this.state.customRoles = [];
+    this.state.customRoles.push(roleDef);
+    this.addAudit(
+      actor,
+      'إنشاء دور وظيفي مخصص',
+      'CustomRole',
+      roleDef.id,
+      `إنشاء دور مخصص (${roleDef.nameAr}) بصلاحيات تفصيلية على الأقسام`,
+      { deviceName }
+    );
+    this.persist();
+    return roleDef;
+  }
+
+  public updateCustomRole(
+    actorUserId: string,
+    roleId: string,
+    patch: {
+      nameAr?: string;
+      nameEn?: string;
+      descriptionAr?: string;
+      modulePermissions?: Partial<Record<PermissionModuleKey, PermissionLevel[]>>;
+    },
+    deviceName?: string
+  ): CustomRoleDefinition {
+    const actor = this.assertTeamManager(actorUserId);
+    const list = this.state.customRoles || [];
+    const roleDef = list.find((r) => r.id === roleId);
+    if (!roleDef) throw new Error('الدور المخصص غير موجود');
+    if (patch.nameAr?.trim()) roleDef.nameAr = patch.nameAr.trim();
+    if (patch.nameEn?.trim()) roleDef.nameEn = patch.nameEn.trim();
+    if (patch.descriptionAr !== undefined) roleDef.descriptionAr = patch.descriptionAr.trim();
+    if (patch.modulePermissions !== undefined) {
+      roleDef.modulePermissions = patch.modulePermissions;
+      roleDef.legacyPermissions = deriveLegacyPermissionsFromModules(patch.modulePermissions);
+    }
+    roleDef.updatedAt = new Date().toISOString();
+
+    for (const u of this.state.users) {
+      if (u.customRoleId === roleId) {
+        u.roleLabelAr = roleDef.nameAr;
+        u.roleLabelEn = roleDef.nameEn;
+      }
+    }
+
+    this.addAudit(
+      actor,
+      'تعديل دور وظيفي مخصص',
+      'CustomRole',
+      roleId,
+      `تحديث صلاحيات أو مسمى الدور المخصص (${roleDef.nameAr})`,
+      { deviceName }
+    );
+    this.persist();
+    return roleDef;
+  }
+
+  public deleteCustomRole(actorUserId: string, roleId: string, deviceName?: string): { deletedId: string } {
+    const actor = this.assertTeamManager(actorUserId);
+    const list = this.state.customRoles || [];
+    const roleDef = list.find((r) => r.id === roleId);
+    if (!roleDef) throw new Error('الدور المخصص غير موجود');
+    const assigned = this.state.users.filter((u) => u.customRoleId === roleId);
+    if (assigned.length > 0) {
+      throw new Error(`لا يمكن حذف الدور لأنه مسند حالياً إلى ${assigned.length} موظفين — غيّر أدوارهم أولاً`);
+    }
+    this.state.customRoles = list.filter((r) => r.id !== roleId);
+    this.addAudit(
+      actor,
+      'حذف دور وظيفي مخصص',
+      'CustomRole',
+      roleId,
+      `حذف الدور المخصص (${roleDef.nameAr})`,
+      { deviceName }
+    );
+    this.persist();
+    return { deletedId: roleId };
+  }
+
+  public updateRoleModuleMatrix(
+    actorUserId: string,
+    role: RoleKey,
+    modulePermissions: Partial<Record<PermissionModuleKey, PermissionLevel[]>>,
+    deviceName?: string
+  ) {
+    const actor = this.assertTeamManager(actorUserId);
+    if (actor.role === role) {
+      throw new PermissionDeniedError('لا يمكن لأي مستخدم تعديل صلاحيات دوره الحالي');
+    }
+    if (actor.role === 'gm' && (role === 'sys_owner' || role === 'gm')) {
+      throw new PermissionDeniedError('تعديل صلاحيات مالك النظام أو مدير الشركة حصري لمالك النظام');
+    }
+    if (role === 'sys_owner') {
+      const teamPerms = modulePermissions.team || [];
+      if (!teamPerms.includes('manage') || !teamPerms.includes('view')) {
+        throw new Error('لا يمكن سحب صلاحية إدارة الفريق من مالك النظام');
+      }
+    }
+    if (!this.state.roleModulePermissions) {
+      this.state.roleModulePermissions = buildAllDefaultRoleModulePermissions();
+    }
+    this.state.roleModulePermissions[role] = modulePermissions;
+    // Sync legacy rolePermissions array for this role so older checks stay aligned
+    this.state.rolePermissions[role] = deriveLegacyPermissionsFromModules(modulePermissions);
+
+    this.addAudit(
+      actor,
+      'تحديث مصفوفة صلاحيات الأقسام',
+      'RoleModuleMatrix',
+      role,
+      `تحديث مصفوفة الصلاحيات التفصيلية للدور (${role})`,
+      { deviceName }
+    );
+    this.persist();
+    return {
+      roleModulePermissions: this.state.roleModulePermissions,
+      rolePermissions: this.state.rolePermissions,
+    };
+  }
+
+  public updateOwnProfile(
+    userId: string,
+    patch: Record<string, unknown>,
+    deviceName?: string
+  ): StaffUser {
+    const user = this.getActingUser(userId);
+    const forbiddenFields = [
+      'role',
+      'roleLabelAr',
+      'roleLabelEn',
+      'customRoleId',
+      'customModulePermissions',
+      'allowedPropertyIds',
+      'accountStatus',
+      'active',
+      'approvalLimitSar',
+      'companyId',
+      'permissions',
+    ];
+    for (const key of forbiddenFields) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        throw new PermissionDeniedError('لا تملك صلاحية تعديل الدور الوظيفي أو الصلاحيات من الملف الشخصي');
+      }
+    }
+
+    if (typeof patch.nameAr === 'string' && patch.nameAr.trim()) {
+      user.nameAr = patch.nameAr.trim();
+    }
+    if (typeof patch.nameEn === 'string') {
+      user.nameEn = patch.nameEn.trim() || user.nameAr;
+    }
+    if (typeof patch.secondaryPhone === 'string') {
+      user.secondaryPhone = patch.secondaryPhone.trim() || undefined;
+    }
+    if (typeof patch.username === 'string') {
+      const normUsername = patch.username.trim().toLowerCase();
+      if (
+        normUsername &&
+        this.state.users.some((u) => u.id !== user.id && u.username?.toLowerCase() === normUsername)
+      ) {
+        throw new Error('اسم المستخدم مستخدم بالفعل من قِبل موظف آخر');
+      }
+      user.username = normUsername || undefined;
+    }
+    if (typeof patch.avatarDataUrl === 'string' || patch.avatarDataUrl === null) {
+      user.avatarDataUrl = typeof patch.avatarDataUrl === 'string' && patch.avatarDataUrl ? patch.avatarDataUrl : undefined;
+    }
+    if (patch.notificationPrefs && typeof patch.notificationPrefs === 'object') {
+      user.notificationPrefs = {
+        ...(user.notificationPrefs || {
+          dndEnabled: false,
+          taskAssigned: true,
+          taskReminder: true,
+          taskApproved: true,
+          taskComment: true,
+          urgentTicket: true,
+        }),
+        ...(patch.notificationPrefs as Partial<StaffNotificationPrefs>),
+      };
+    }
+
+    this.addAudit(
+      user,
+      'تحديث الملف الشخصي',
+      'StaffUserProfile',
+      user.id,
+      `حدّث ${user.nameAr} بيانات ملفه الشخصي`,
+      { deviceName }
+    );
+    this.persist();
+    return user;
+  }
+
+  public requestContactVerification(
+    userId: string,
+    type: 'email' | 'phone',
+    newValue: string,
+    deviceName?: string
+  ) {
+    const user = this.getActingUser(userId);
+    const trimmed = (newValue || '').trim();
+    if (!trimmed) {
+      throw new Error(type === 'email' ? 'يرجى إدخال البريد الإلكتروني الجديد' : 'يرجى إدخال رقم الجوال الجديد');
+    }
+    const normalized = type === 'email' ? trimmed.toLowerCase() : trimmed;
+    if (type === 'email') {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+        throw new Error('صيغة البريد الإلكتروني غير صحيحة');
+      }
+      if (this.state.users.some((u) => u.id !== user.id && u.email.toLowerCase() === normalized)) {
+        throw new Error('البريد الإلكتروني مستخدم لحساب آخر');
+      }
+    } else {
+      if (this.state.users.some((u) => u.id !== user.id && u.phone === normalized)) {
+        throw new Error('رقم الجوال مسجل لموظف آخر');
+      }
+    }
+
+    const code = String(crypto.randomInt(100000, 1000000));
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const purpose: RecoveryPurpose = type === 'email' ? 'verify_email' : 'verify_phone';
+
+    this.sqlite.createRecoveryToken({
+      id: uid('vrf'),
+      userId: user.id,
+      purpose,
+      targetValue: normalized,
+      code,
+      expiresAt,
+    });
+
+    if (type === 'email') {
+      user.pendingEmailVerification = { targetValue: normalized, requestedAt: new Date().toISOString(), expiresAt };
+    } else {
+      user.pendingPhoneVerification = { targetValue: normalized, requestedAt: new Date().toISOString(), expiresAt };
+    }
+
+    this.addAudit(
+      user,
+      type === 'email' ? 'طلب تحقق تغيير البريد الإلكتروني' : 'طلب تحقق تغيير رقم الجوال',
+      'ContactVerification',
+      user.id,
+      `طلب رمز تحقق لتحديث ${type === 'email' ? 'البريد الإلكتروني' : 'رقم الجوال'}`,
+      { deviceName }
+    );
+    this.persist();
+
+    const integrations = this.state.settings?.integrationsConfig;
+    const externalConfigured =
+      type === 'email' ? Boolean(integrations?.smtpEnabled) : Boolean(integrations?.smsGatewayEnabled);
+    const showLocalPreview = !externalConfigured && this.isLocalSimulationAllowed();
+
+    return {
+      ok: true,
+      pendingValue: normalized,
+      expiresAt,
+      externalGatewayConfigured: externalConfigured,
+      deliveryNotice: externalConfigured
+        ? 'تم إرسال رمز التحقق عبر البوابة المربوطة.'
+        : 'تم إنشاء رمز التحقق محلياً لعدم تفعيل بوابة بريد/SMS خارجية في هذه البيئة.',
+      ...(showLocalPreview ? { localSimulationCode: code } : {}),
+    };
+  }
+
+  public confirmContactVerification(
+    userId: string,
+    type: 'email' | 'phone',
+    code: string,
+    deviceName?: string
+  ): StaffUser {
+    return this.runTransaction(() => {
+      const user = this.getActingUser(userId);
+      const purpose: RecoveryPurpose = type === 'email' ? 'verify_email' : 'verify_phone';
+      const verified = this.sqlite.verifyAndConsumeRecoveryToken(user.id, purpose, code || '');
+      if (!verified.ok) {
+        throw new Error(verified.reason);
+      }
+      const nextVal = verified.record.targetValue;
+      if (!nextVal) {
+        throw new Error('القيمة المستهدفة للتحقق غير موجودة');
+      }
+      const oldVal = type === 'email' ? user.email : user.phone;
+      if (type === 'email') {
+        user.email = nextVal;
+        user.pendingEmailVerification = undefined;
+      } else {
+        user.phone = nextVal;
+        user.pendingPhoneVerification = undefined;
+      }
+
+      this.addAudit(
+        user,
+        type === 'email' ? 'تأكيد تحديث البريد الإلكتروني' : 'تأكيد تحديث رقم الجوال',
+        'StaffUserProfile',
+        user.id,
+        `تحديث ${type === 'email' ? 'البريد الإلكتروني' : 'رقم الجوال'} بعد التحقق بالرمز`,
+        { oldValue: oldVal, newValue: nextVal, deviceName }
+      );
+      this.persist();
+      return user;
+    });
+  }
+
+  public requestCredentialRecovery(
+    emailOrIdentifier: string,
+    purpose: 'password_reset' | 'pin_reset',
+    deviceName?: string
+  ) {
+    const clean = (emailOrIdentifier || '').trim().toLowerCase();
+    const integrations = this.state.settings?.integrationsConfig;
+    const externalConfigured = Boolean(integrations?.smtpEnabled);
+    const user = this.state.users.find(
+      (u) =>
+        u.email.toLowerCase() === clean ||
+        (u.username && u.username.toLowerCase() === clean) ||
+        u.phone === (emailOrIdentifier || '').trim()
+    );
+
+    const uniformMessage =
+      'إذا كان الحساب مسجلاً ونشطاً، فسيتم إرسال رمز تحقق للاستعادة صالح لمدة 15 دقيقة.';
+
+    if (!user || !user.active || (user.accountStatus && user.accountStatus !== 'نشط')) {
+      return {
+        ok: true,
+        message: uniformMessage,
+        externalGatewayConfigured: externalConfigured,
+      };
+    }
+
+    const code = String(crypto.randomInt(100000, 1000000));
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    this.sqlite.createRecoveryToken({
+      id: uid('rec'),
+      userId: user.id,
+      purpose,
+      targetValue: user.email,
+      code,
+      expiresAt,
+    });
+
+    this.addAudit(
+      user,
+      purpose === 'password_reset' ? 'طلب استعادة كلمة المرور' : 'طلب إعادة تعيين رمز PIN',
+      'CredentialRecovery',
+      user.id,
+      `طلب رمز استعادة (${purpose})`,
+      { deviceName }
+    );
+    this.persist();
+
+    const showLocalPreview = !externalConfigured && this.isLocalSimulationAllowed();
+    return {
+      ok: true,
+      message: uniformMessage,
+      externalGatewayConfigured: externalConfigured,
+      ...(showLocalPreview ? { localSimulationCode: code } : {}),
+    };
+  }
+
+  public completeCredentialRecovery(
+    input: {
+      emailOrIdentifier: string;
+      purpose: 'password_reset' | 'pin_reset';
+      code: string;
+      newSecret: string;
+      confirmSecret: string;
+    },
+    deviceName?: string
+  ): { ok: true; userId: string; terminateSessions: boolean } {
+    return this.runTransaction(() => {
+      const clean = (input.emailOrIdentifier || '').trim().toLowerCase();
+      const user = this.state.users.find(
+        (u) =>
+          u.email.toLowerCase() === clean ||
+          (u.username && u.username.toLowerCase() === clean) ||
+          u.phone === (input.emailOrIdentifier || '').trim()
+      );
+      if (!user || !user.active || (user.accountStatus && user.accountStatus !== 'نشط')) {
+        throw new Error('رمز التحقق غير صحيح أو منتهي الصلاحية');
+      }
+      if (!input.newSecret || input.newSecret !== input.confirmSecret) {
+        throw new Error('القيمة الجديدة وتأكيدها غير متطابقتين');
+      }
+      if (input.purpose === 'password_reset' && input.newSecret.length < 8) {
+        throw new Error('كلمة المرور الجديدة يجب أن لا تقل عن 8 أحرف');
+      }
+      if (input.purpose === 'pin_reset' && !/^\d{4,6}$/.test(input.newSecret)) {
+        throw new Error('رمز PIN الجديد يجب أن يتكون من 4 إلى 6 أرقام');
+      }
+
+      const verified = this.sqlite.verifyAndConsumeRecoveryToken(user.id, input.purpose, input.code || '');
+      if (!verified.ok) {
+        throw new Error(verified.reason);
+      }
+
+      if (input.purpose === 'password_reset') {
+        this.sqlite.updateUserCredentials(user.id, { password: input.newSecret });
+      } else {
+        this.sqlite.updateUserCredentials(user.id, { pin: input.newSecret });
+      }
+
+      if (!user.security) user.security = {};
+      user.security.failedAttempts = 0;
+      user.security.lockedUntil = undefined;
+      user.security.lastPasswordChangedAt = new Date().toISOString();
+      if (input.purpose === 'pin_reset') {
+        user.security.hasPin = true;
+      }
+
+      let terminateSessions = false;
+      if (input.purpose === 'password_reset') {
+        this.sqlite.revokeOtherSessionsForUser(user.id);
+        terminateSessions = true;
+      }
+
+      this.addAudit(
+        user,
+        input.purpose === 'password_reset' ? 'استعادة كلمة المرور بنجاح' : 'إعادة تعيين رمز PIN بنجاح',
+        'CredentialRecovery',
+        user.id,
+        `تمت استعادة ${input.purpose === 'password_reset' ? 'كلمة المرور وإلغاء الجلسات السابقة' : 'رمز الدخول السريع PIN'}`,
+        { deviceName }
+      );
+      if (input.purpose === 'pin_reset') {
+        user.security.pinEnabled = true;
+        user.security.pinFailedAttempts = 0;
+        user.security.pinLockedUntil = undefined;
+        user.security.requirePasswordAfterPinLock = false;
+      }
+      this.persist();
+      return { ok: true, userId: user.id, terminateSessions };
+    });
+  }
+
+  public togglePinEnabled(
+    userId: string,
+    enabled: boolean,
+    currentPassword: string,
+    newPin?: string,
+    deviceName?: string
+  ): StaffUser {
+    return this.runTransaction(() => {
+      const user = this.getActingUser(userId);
+      if (!currentPassword || !this.sqlite.verifyUserPassword(user.id, currentPassword)) {
+        throw new Error('كلمة المرور الحالية مطلوبة وغير صحيحة لتغيير حالة رمز PIN');
+      }
+      if (!user.security) user.security = {};
+      if (!enabled) {
+        this.sqlite.disableUserPin(user.id);
+        user.security.pinEnabled = false;
+        user.security.hasPin = false;
+        user.security.pinFailedAttempts = 0;
+        user.security.pinLockedUntil = undefined;
+        user.security.requirePasswordAfterPinLock = false;
+      } else {
+        const cleanPin = (newPin || '').trim();
+        if (cleanPin) {
+          if (!/^\d{4,6}$/.test(cleanPin)) {
+            throw new Error('رمز الدخول السريع (PIN) يجب أن يتكون من 4 إلى 6 أرقام');
+          }
+          this.sqlite.updateUserCredentials(user.id, { pin: cleanPin });
+          user.security.hasPin = true;
+        } else if (!this.sqlite.getCredentialStatus(user.id).hasPin) {
+          throw new Error('أدخل رمز PIN جديد من 4 إلى 6 أرقام لتفعيل الدخول السريع');
+        }
+        user.security.pinEnabled = true;
+        user.security.pinFailedAttempts = 0;
+        user.security.pinLockedUntil = undefined;
+        user.security.requirePasswordAfterPinLock = false;
+      }
+      this.addAudit(
+        user,
+        enabled ? 'تفعيل الدخول برمز PIN' : 'تعطيل الدخول برمز PIN',
+        'StaffSecurity',
+        user.id,
+        enabled ? 'تفعيل رمز الدخول السريع PIN بعد التحقق من كلمة المرور' : 'تعطيل رمز الدخول السريع PIN وحذفه بأمان',
+        { deviceName }
+      );
+      this.persist();
+      return user;
+    });
+  }
+
+  public toggleTwoFactor(
+    userId: string,
+    enabled: boolean,
+    currentPassword: string,
+    deviceName?: string
+  ): StaffUser {
+    return this.runTransaction(() => {
+      const user = this.getActingUser(userId);
+      if (!currentPassword || !this.sqlite.verifyUserPassword(user.id, currentPassword)) {
+        throw new Error('كلمة المرور الحالية غير صحيحة');
+      }
+      if (!user.security) user.security = {};
+      user.security.twoFactorEnabled = Boolean(enabled);
+      this.addAudit(
+        user,
+        enabled ? 'تفعيل التحقق الإضافي للأجهزة الجديدة' : 'تعطيل التحقق الإضافي للأجهزة الجديدة',
+        'StaffSecurity',
+        user.id,
+        enabled ? 'تفعيل التحقق ثنائي الخطوة عبر البريد الموثق للأجهزة غير المعروفة' : 'تعطيل التحقق الإضافي عند تسجيل الدخول',
+        { deviceName }
+      );
+      this.persist();
+      return user;
+    });
+  }
+
+  public evaluateMfaRequirement(
+    user: StaffUser,
+    deviceId?: string,
+    options?: { suspiciousAttempt?: boolean }
+  ): 'new_device' | 'unusual_activity' | null {
+    const policyRequires = Boolean(this.state.securityPolicy?.requireMfaOnNewDevice);
+    const userRequires = Boolean(user.security?.twoFactorEnabled);
+    if (!policyRequires && !userRequires && !options?.suspiciousAttempt) {
+      return null;
+    }
+    if (deviceId && this.sqlite.isTrustedDevice(user.id, deviceId) && !options?.suspiciousAttempt) {
+      return null;
+    }
+    if (!deviceId && !userRequires && !policyRequires && !options?.suspiciousAttempt) {
+      return null;
+    }
+    // If MFA policy or 2FA is active and device is unrecognized (or suspicious attempt occurred)
+    if (options?.suspiciousAttempt) return 'unusual_activity';
+    if ((policyRequires || userRequires) && deviceId && !this.sqlite.isTrustedDevice(user.id, deviceId)) {
+      return 'new_device';
+    }
+    if (userRequires && !deviceId) {
+      return 'new_device';
+    }
+    return null;
+  }
+
+  private maskEmailAddress(email: string): string {
+    const parts = (email || '').split('@');
+    if (parts.length !== 2) return '***';
+    const [local, domain] = parts;
+    const head = local.slice(0, Math.min(2, local.length));
+    return `${head}***@${domain}`;
+  }
+
+  public createMfaChallenge(user: StaffUser, reason: string, deviceName?: string) {
+    const code = String(crypto.randomInt(100000, 1000000));
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    this.sqlite.createRecoveryToken({
+      id: uid('mfa'),
+      userId: user.id,
+      purpose: 'mfa_challenge',
+      targetValue: user.email,
+      code,
+      expiresAt,
+    });
+    const integrations = this.state.settings?.integrationsConfig;
+    const externalConfigured = Boolean(integrations?.smtpEnabled);
+    const showLocalPreview = !externalConfigured && this.isLocalSimulationAllowed();
+    this.addAudit(
+      user,
+      'إرسال رمز تحقق إضافي لتسجيل الدخول',
+      'MfaChallenge',
+      user.id,
+      `طلب تحقق إضافي (${reason === 'unusual_activity' ? 'نشاط غير معتاد' : 'جهاز جديد'})`,
+      { deviceName }
+    );
+    this.persist();
+    return {
+      maskedEmail: this.maskEmailAddress(user.email),
+      expiresAt,
+      externalGatewayConfigured: externalConfigured,
+      deliveryNotice: externalConfigured
+        ? `تم إرسال رمز التحقق المؤقت إلى البريد الموثق ${this.maskEmailAddress(user.email)}.`
+        : `تم إنشاء رمز تحقق إضافي للبريد ${this.maskEmailAddress(user.email)} (بيئة محلية بدون SMTP).`,
+      ...(showLocalPreview ? { localSimulationCode: code } : {}),
+    };
+  }
+
+  public verifyMfaChallenge(
+    userId: string,
+    code: string,
+    opts?: { trustDevice?: boolean; deviceId?: string; deviceName?: string; appType?: 'web' | 'desktop' }
+  ): StaffUser {
+    return this.runTransaction(() => {
+      const user = this.getActingUser(userId);
+      this.assertAccountLoginAllowed(user);
+      const verified = this.sqlite.verifyAndConsumeRecoveryToken(user.id, 'mfa_challenge', code || '');
+      if (!verified.ok) {
+        this.recordLoginEvent({
+          userId: user.id,
+          deviceName: opts?.deviceName || user.deviceName,
+          method: 'مصادقة ثنائية (2FA)',
+          success: false,
+        });
+        this.persist();
+        throw new Error(verified.reason);
+      }
+      if (opts?.trustDevice && opts?.deviceId) {
+        this.sqlite.registerOrTouchTrustedDevice(
+          user.id,
+          opts.deviceId,
+          opts.deviceName || user.deviceName,
+          opts.appType === 'desktop' ? 'desktop' : 'web'
+        );
+      }
+      this.recordLoginEvent({
+        userId: user.id,
+        deviceName: opts?.deviceName || user.deviceName,
+        method: 'مصادقة ثنائية (2FA)',
+        success: true,
+      });
+      this.addAudit(
+        user,
+        'اجتياز التحقق الإضافي لتسجيل الدخول',
+        'MfaChallenge',
+        user.id,
+        opts?.trustDevice ? 'تم التحقق واعتماد الجهاز كجهاز موثوق' : 'تم التحقق من الجلسة بنجاح',
+        { deviceName: opts?.deviceName }
+      );
+      this.persist();
+      return user;
+    });
+  }
+
+  public getAuthMePayload(userId: string) {
+    const user = this.getActingUser(userId);
+    const effectiveModulePermissions = getEffectiveModulePermissions(this.state, user);
+    const rolePermissions = this.state.rolePermissions?.[user.role] || [];
+    const company = this.state.companies?.[0];
+    return {
+      user: this.sanitizeUsersForActor(user).find((u) => u.id === user.id) || user,
+      workspaceId: this.workspaceId,
+      company: {
+        id: company?.id || `comp-${this.workspaceId}`,
+        nameAr: this.state.settings?.nameAr || company?.nameAr || 'AqarPlus',
+        nameEn: this.state.settings?.nameEn || company?.nameEn || 'AqarPlus',
+        logoDataUrl: this.state.settings?.logoDataUrl,
+      },
+      rolePermissions,
+      modulePermissions: effectiveModulePermissions,
     };
   }
 }

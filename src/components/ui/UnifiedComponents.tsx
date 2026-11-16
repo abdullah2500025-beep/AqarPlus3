@@ -1,5 +1,5 @@
-import React from 'react';
-import { Loader2 } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { ArrowLeft, ArrowRight, Loader2, X } from 'lucide-react';
 import { AQAR_THEME } from '../../theme/designTokens';
 import { triggerHaptic } from '../../utils/haptics';
 
@@ -109,3 +109,84 @@ export function UnifiedEmptyState({ icon, title, description, action }: UnifiedE
     </div>
   );
 }
+
+interface UnifiedBackButtonProps {
+  onClick: () => void;
+  lang?: 'ar' | 'en';
+  label?: string;
+  compact?: boolean;
+  className?: string;
+}
+
+export function UnifiedBackButton({
+  onClick,
+  lang = 'ar',
+  label,
+  compact = false,
+  className = '',
+}: UnifiedBackButtonProps) {
+  const isAr = lang === 'ar';
+  const resolvedLabel = label || (isAr ? 'رجوع' : 'Back');
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        triggerHaptic('light');
+        onClick();
+      }}
+      title={resolvedLabel}
+      aria-label={resolvedLabel}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-200 dark:border-white/15 bg-white/80 dark:bg-white/[0.06] hover:bg-slate-100 dark:hover:bg-white/15 text-slate-700 dark:text-slate-100 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+        compact ? 'px-2.5 py-1.5' : 'px-3 py-2'
+      } ${className}`}
+    >
+      {isAr ? <ArrowRight className="w-4 h-4 shrink-0" /> : <ArrowLeft className="w-4 h-4 shrink-0" />}
+      <span>{resolvedLabel}</span>
+    </button>
+  );
+}
+
+interface UnifiedModalCloseButtonProps {
+  onClick: () => void;
+  lang?: 'ar' | 'en';
+  label?: string;
+  className?: string;
+}
+
+export function UnifiedModalCloseButton({
+  onClick,
+  lang = 'ar',
+  label,
+  className = '',
+}: UnifiedModalCloseButtonProps) {
+  const isAr = lang === 'ar';
+  const resolvedLabel = label || (isAr ? 'إغلاق' : 'Close');
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        triggerHaptic('light');
+        onClick();
+      }}
+      title={resolvedLabel}
+      aria-label={resolvedLabel}
+      className={`w-9 h-9 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-100/80 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/15 text-slate-600 dark:text-slate-200 flex items-center justify-center transition-colors shrink-0 cursor-pointer ${className}`}
+    >
+      <X className="w-4 h-4" />
+    </button>
+  );
+}
+
+export function useEscapeKey(enabled: boolean, onEscape: () => void) {
+  useEffect(() => {
+    if (!enabled || typeof window === 'undefined') return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onEscape();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [enabled, onEscape]);
+}
+

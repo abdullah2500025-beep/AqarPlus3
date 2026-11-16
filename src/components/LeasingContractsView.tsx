@@ -35,6 +35,7 @@ import {
 import { formatDateTime, formatSar } from '../utils/formatters';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { CreateTaskQuickButton } from './CreateTaskQuickModal';
+import { UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 import { readFileAsDataUrl, runGeminiOcrExtraction } from '../utils/ocrClient';
 
 export function LeasingContractsView() {
@@ -43,6 +44,7 @@ export function LeasingContractsView() {
     currentUser,
     lang,
     hasPermission,
+    hasModulePermission,
     mutate,
     pushToast,
     baseCurrency,
@@ -53,6 +55,13 @@ export function LeasingContractsView() {
   } = useAqar();
   const [tab, setTab] = useState<'contracts' | 'handovers' | 'reminders'>('contracts');
   const [showNewContract, setShowNewContract] = useState(false);
+
+  const canCreateContract = hasModulePermission('contracts', 'create') || hasPermission('manage_contracts');
+  const canEditContract = hasModulePermission('contracts', 'edit') || hasPermission('manage_contracts');
+  const canDeleteRule = hasModulePermission('contracts', 'delete_void') || hasPermission('manage_contracts');
+  const canArchiveContract = hasModulePermission('contracts', 'delete_void') || hasModulePermission('archive', 'create') || hasPermission('manage_contracts');
+  const canCreateHandover = hasModulePermission('units', 'create') || hasModulePermission('properties', 'edit') || hasPermission('manage_properties');
+  const canApproveHandover = hasModulePermission('contracts', 'approve') || hasModulePermission('units', 'approve') || hasPermission('approve_expense_supervisor');
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
   const [showExtraFees, setShowExtraFees] = useState(false);
   const [wizardChecks, setWizardChecks] = useState({
@@ -140,6 +149,18 @@ export function LeasingContractsView() {
     plumbingOk: true,
     cleaningOk: false,
   });
+
+  useEscapeKey(
+    Boolean(showNewContract || editingEjar || showHandoverModal || showNewRuleModal || reminderContract || renewTarget),
+    () => {
+      if (renewTarget) setRenewTarget(null);
+      else if (reminderContract) setReminderContract(null);
+      else if (showNewRuleModal) setShowNewRuleModal(false);
+      else if (showHandoverModal) setShowHandoverModal(false);
+      else if (editingEjar) setEditingEjar(null);
+      else if (showNewContract) setShowNewContract(false);
+    },
+  );
 
   // Auto-open 4-Step Wizard when deep-linked from Properties & Units
   useEffect(() => {
@@ -499,7 +520,7 @@ export function LeasingContractsView() {
             relatedLabel="قسم العقود والتأجير"
             compact
           />
-          {hasPermission('manage_contracts') && tab === 'contracts' && (
+          {canCreateContract && tab === 'contracts' && (
             <button
               onClick={() => {
                 const defaultUnit = availableUnits[0];
@@ -519,7 +540,7 @@ export function LeasingContractsView() {
               <span>{lang === 'ar' ? 'معالج تأجير وحدة (4 خطوات)' : 'New Lease Wizard (4 Steps)'}</span>
             </button>
           )}
-          {hasPermission('manage_properties') && tab === 'handovers' && (
+          {canCreateHandover && tab === 'handovers' && (
             <button
               onClick={() => setShowHandoverModal(true)}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#26478D] text-white hover:bg-[#1e3a75] cursor-pointer whitespace-nowrap"
@@ -528,7 +549,7 @@ export function LeasingContractsView() {
               <span>{lang === 'ar' ? 'محضر إخلاء / استلام جديد' : 'New Handover Inspection'}</span>
             </button>
           )}
-          {hasPermission('manage_contracts') && tab === 'reminders' && (
+          {canEditContract && tab === 'reminders' && (
             <>
               <button
                 onClick={() => handleRunScheduler()}
@@ -607,7 +628,7 @@ export function LeasingContractsView() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        {hasPermission('manage_contracts') && (
+                        {canEditContract && (
                           <button
                             onClick={() => {
                               setEditingEjar(c);
@@ -630,7 +651,7 @@ export function LeasingContractsView() {
                           <BellRing className="w-3.5 h-3.5" />
                           <span>{lang === 'ar' ? 'تنبيه / جدولة' : 'Remind'}</span>
                         </button>
-                        {hasPermission('manage_contracts') && (c.lifecycleStatus === 'نشط' || c.lifecycleStatus === 'بانتظار التجديد') && (
+                        {canCreateContract && (c.lifecycleStatus === 'نشط' || c.lifecycleStatus === 'بانتظار التجديد') && (
                           <button
                             onClick={() => openRenewModal(c)}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300/70 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 text-[11px] font-medium cursor-pointer whitespace-nowrap"
@@ -639,7 +660,7 @@ export function LeasingContractsView() {
                             <span>{lang === 'ar' ? 'تجديد سريع' : 'Renew'}</span>
                           </button>
                         )}
-                        {hasPermission('manage_contracts') && !c.archivedAt && (
+                        {canArchiveContract && !c.archivedAt && (
                           <MoveToArchiveButton
                             category="contracts"
                             entityId={c.id}
@@ -696,7 +717,7 @@ export function LeasingContractsView() {
                     التأمين: {formatSar(h.depositHeld, lang)} · التلفيات: {formatSar(h.damageCost, lang)} · الصافي:{' '}
                     <strong className="text-[#26478D] dark:text-blue-400">{formatSar(h.netRefundOrDue, lang)}</strong>
                   </div>
-                  {h.status !== 'معتمد' && hasPermission('approve_expense_supervisor') && (
+                  {h.status !== 'معتمد' && canApproveHandover && (
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={() => handleApproveHandover(h.id, 'تحتاج إلى تنظيف')}
@@ -753,7 +774,7 @@ export function LeasingContractsView() {
                       >
                         {rule.enabled ? (lang === 'ar' ? 'مفعّلة' : 'Active') : lang === 'ar' ? 'متوقفة' : 'Paused'}
                       </button>
-                      {hasPermission('manage_contracts') && (
+                      {canDeleteRule && (
                         <button
                           onClick={() => handleDeleteRule(rule.id)}
                           className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 cursor-pointer"
@@ -887,9 +908,7 @@ export function LeasingContractsView() {
                     {chosenProp ? `${chosenProp.nameAr} · وحدة ${chosenUnit?.unitNumber || ''}` : lang === 'ar' ? 'خطوات متسلسلة من الاختيار إلى جدول الدفعات' : 'Step-by-step leasing & installment schedule'}
                   </p>
                 </div>
-                <button type="button" onClick={() => setShowNewContract(false)} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer">
-                  <X className="w-4 h-4" />
-                </button>
+                <UnifiedModalCloseButton onClick={() => setShowNewContract(false)} lang={lang} />
               </div>
 
               {/* Progress Stepper Bar */}
@@ -1268,9 +1287,7 @@ export function LeasingContractsView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">توثيق وتحديث حالة إيجار ({editingEjar.internalNumber})</h3>
-              <button type="button" onClick={() => setEditingEjar(null)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setEditingEjar(null)} lang={lang} />
             </div>
             <div className="space-y-3 text-xs">
               <input
@@ -1322,9 +1339,7 @@ export function LeasingContractsView() {
           >
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold">إعداد محضر فحص واستلام / إخلاء وحدة</h3>
-              <button type="button" onClick={() => setShowHandoverModal(false)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowHandoverModal(false)} lang={lang} />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <select
@@ -1409,9 +1424,7 @@ export function LeasingContractsView() {
               <h3 className="text-base font-bold">
                 {lang === 'ar' ? 'إضافة قاعدة جدولة تنبيهات الإيجار' : 'New Rent Reminder Rule'}
               </h3>
-              <button type="button" onClick={() => setShowNewRuleModal(false)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowNewRuleModal(false)} lang={lang} />
             </div>
             <div className="space-y-3 text-xs">
               <input
@@ -1516,9 +1529,7 @@ export function LeasingContractsView() {
                   {state.tenants.find((t) => t.id === reminderContract.tenantId)?.phone}
                 </p>
               </div>
-              <button type="button" onClick={() => setReminderContract(null)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setReminderContract(null)} lang={lang} />
             </div>
 
             <div className="space-y-2 text-xs">
@@ -1623,9 +1634,7 @@ export function LeasingContractsView() {
                   {state.units.find((u) => u.id === renewTarget.unitId)?.unitNumber}
                 </p>
               </div>
-              <button type="button" onClick={() => setRenewTarget(null)} className="cursor-pointer">
-                <X className="w-4 h-4" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setRenewTarget(null)} lang={lang} />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>

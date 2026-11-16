@@ -5,8 +5,16 @@ import {
   LoginProfileSummary,
   OfflineQueuedAction,
   PermissionKey,
+  PermissionLevel,
+  PermissionModuleKey,
   StaffUser,
 } from '../types/aqar';
+import {
+  getRecommendedLandingNav,
+  userCanAccessNav,
+  userHasLegacyPermission,
+  userHasModuleAction,
+} from '../utils/rbac';
 import {
   convertCurrency,
   DEFAULT_CURRENCY_RATES_TO_SAR,
@@ -53,6 +61,45 @@ export interface CompanyBrandingSummary {
   logoDataUrl?: string;
 }
 
+export interface CompanyDiscoveryOption {
+  workspaceId: string;
+  companyNameAr: string;
+  companyNameEn: string;
+  logoDataUrl?: string;
+  userNameAr?: string;
+  roleLabelAr: string;
+  roleLabelEn?: string;
+}
+
+export interface MfaChallengeDetails {
+  challengeToken: string;
+  reason: string;
+  workspaceId: string;
+  companyBranding?: CompanyBrandingSummary;
+  maskedEmail: string;
+  expiresAt: string;
+  deliveryNotice: string;
+  localSimulationCode?: string;
+}
+
+export interface LoginActionResult {
+  ok: boolean;
+  error?: string;
+  retryAfterSec?: number;
+  requiresCompanySelection?: boolean;
+  selectionToken?: string;
+  companies?: CompanyDiscoveryOption[];
+  requiresMfa?: boolean;
+  mfaChallenge?: MfaChallengeDetails;
+}
+
+export interface LastCompanyMeta {
+  workspaceId: string;
+  nameAr: string;
+  nameEn: string;
+  logoDataUrl?: string;
+}
+
 export type PrimaryNavSection =
   | 'dashboard'
   | 'daily_hub'
@@ -66,6 +113,7 @@ export type PrimaryNavSection =
   | 'archive'
   | 'templates'
   | 'settings'
+  | 'profile'
   | 'about';
 
 export type NavSection =
@@ -88,8 +136,46 @@ interface AqarContextValue {
   demoLoginEnabled: boolean;
   loginProfiles: LoginProfileSummary[];
   companyBranding: CompanyBrandingSummary | null;
-  loginWithPassword: (identifier: string, password: string, workspaceOverride?: string) => Promise<{ ok: boolean; error?: string }>;
-  loginWithPin: (userId: string, pin: string, workspaceOverride?: string) => Promise<{ ok: boolean; error?: string }>;
+  lastCompanyMeta: LastCompanyMeta | null;
+  rememberedIdentifier: string;
+  saveRememberedIdentifier: (identifier: string | null) => void;
+  sessionExpiredReason: string | null;
+  clearSessionExpiredReason: () => void;
+  appType: 'web' | 'desktop';
+  deviceId: string;
+  desktopProtectedStorage: boolean;
+  loginWithPassword: (
+    identifier: string,
+    password: string,
+    workspaceOverride?: string,
+    rememberMe?: boolean,
+    opts?: { autoDiscover?: boolean; selectedWorkspaceId?: string }
+  ) => Promise<LoginActionResult>;
+  loginWithPin: (
+    userIdOrIdentifier: string,
+    pin: string,
+    workspaceOverride?: string,
+    rememberMe?: boolean,
+    opts?: { autoDiscover?: boolean; selectedWorkspaceId?: string }
+  ) => Promise<LoginActionResult>;
+  selectCompanyForLogin: (
+    selectionToken: string,
+    selectedWorkspaceId: string,
+    rememberMe?: boolean
+  ) => Promise<LoginActionResult>;
+  verifyMfaForLogin: (
+    challengeToken: string,
+    code: string,
+    trustDevice?: boolean
+  ) => Promise<LoginActionResult>;
+  resendMfaCode: (challengeToken: string) => Promise<{
+    ok: boolean;
+    error?: string;
+    deliveryNotice?: string;
+    localSimulationCode?: string;
+    expiresAt?: string;
+  }>;
+  refreshSession: () => Promise<boolean>;
   provisionWorkspace: (params: {
     workspaceSlug: string;
     companyNameAr: string;
@@ -101,6 +187,7 @@ interface AqarContextValue {
     pin?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
+  logoutAllDevices: () => Promise<void>;
   changeCredentials: (params: {
     targetUserId?: string;
     currentPassword?: string;
@@ -111,12 +198,16 @@ interface AqarContextValue {
   currentUser: StaffUser | null;
   switchUser: (userId: string) => void;
   hasPermission: (perm: PermissionKey) => boolean;
+  hasModulePermission: (module: PermissionModuleKey, action?: PermissionLevel) => boolean;
+  canAccessNav: (nav: NavSection) => boolean;
   lang: 'ar' | 'en';
   setLang: (lang: 'ar' | 'en') => void;
   theme: 'dark' | 'light';
   toggleTheme: () => void;
   activeNav: PrimaryNavSection;
   setActiveNav: (nav: NavSection) => void;
+  canGoBackNav: boolean;
+  goBackNav: () => void;
   leasingFinanceTab: LeasingFinanceTab;
   setLeasingFinanceTab: (tab: LeasingFinanceTab) => void;
   leasingWizardUnitId: string | null;
@@ -168,11 +259,57 @@ const AqarContext = createContext<AqarContextValue | null>(null);
 
 const USER_STORAGE_KEY = 'aqarplus_active_user_v1';
 const AUTH_TOKEN_STORAGE_KEY = 'aqarplus_auth_token_v1';
+const REFRESH_TOKEN_STORAGE_KEY = 'aqarplus_refresh_token_v1';
+const DESKTOP_ENCRYPTED_REFRESH_KEY = 'aqarplus_desktop_refresh_cipher_v1';
+const TRUSTED_OFFLINE_META_KEY = 'aqarplus_trusted_offline_meta_v1';
+const REMEMBERED_IDENTIFIER_KEY = 'aqarplus_remembered_identifier_v1';
+const LAST_COMPANY_META_KEY = 'aqarplus_last_company_meta_v1';
 const WORKSPACE_STORAGE_KEY = 'aqarplus_workspace_id_v1';
 const DEVICE_ID_STORAGE_KEY = 'aqarplus_device_id_v1';
 const THEME_STORAGE_KEY = 'aqarplus_theme_v1';
 const LANG_STORAGE_KEY = 'aqarplus_lang_v1';
 const BASE_CURRENCY_STORAGE_KEY = 'aqarplus_base_currency_v1';
+
+const SERVER_ONLY_OFFLINE_BLOCKED_PREFIXES = [
+  '/api/profile/',
+  '/api/team/',
+  '/api/roles',
+  '/api/workspaces/',
+  '/api/auth/',
+  '/api/backups/',
+];
+
+interface TrustedOfflineMeta {
+  workspaceId: string;
+  userId: string;
+  expiresAt: string;
+  rememberMe: boolean;
+}
+
+function safeParseJson<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function getClientAppType(): 'web' | 'desktop' {
+  if (typeof window !== 'undefined' && window.aqarDesktop?.isElectron) {
+    return 'desktop';
+  }
+  return 'web';
+}
+
+function getReadableDeviceName(appType: 'web' | 'desktop'): string {
+  if (typeof navigator === 'undefined') return appType === 'desktop' ? 'AqarPlus Desktop' : 'Web Terminal';
+  const plat = navigator.platform || '';
+  if (appType === 'desktop') {
+    return plat ? `AqarPlus Desktop (${plat})` : 'AqarPlus Desktop';
+  }
+  return plat ? `Web (${plat})` : 'Web Terminal';
+}
 
 function normalizeWorkspaceSlug(raw?: string | null): string {
   const clean = (raw || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
@@ -194,7 +331,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
   const [authChecking, setAuthChecking] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(() =>
-    typeof window !== 'undefined' ? window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) : null
+    typeof window !== 'undefined'
+      ? window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+      : null
   );
   const [workspaceId, setWorkspaceIdState] = useState<string>(() => {
     if (typeof window === 'undefined') return 'default';
@@ -204,7 +343,19 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
   });
   const [demoLoginEnabled, setDemoLoginEnabled] = useState(false);
   const [loginProfiles, setLoginProfiles] = useState<LoginProfileSummary[]>([]);
-  const [companyBranding, setCompanyBranding] = useState<CompanyBrandingSummary | null>(null);
+  const [lastCompanyMeta, setLastCompanyMeta] = useState<LastCompanyMeta | null>(() =>
+    typeof window !== 'undefined' ? safeParseJson<LastCompanyMeta>(window.localStorage.getItem(LAST_COMPANY_META_KEY)) : null
+  );
+  const [companyBranding, setCompanyBranding] = useState<CompanyBrandingSummary | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const saved = safeParseJson<LastCompanyMeta>(window.localStorage.getItem(LAST_COMPANY_META_KEY));
+    return saved ? { nameAr: saved.nameAr, nameEn: saved.nameEn, logoDataUrl: saved.logoDataUrl } : null;
+  });
+  const [rememberedIdentifier, setRememberedIdentifier] = useState<string>(() =>
+    typeof window !== 'undefined' ? window.localStorage.getItem(REMEMBERED_IDENTIFIER_KEY) || '' : ''
+  );
+  const [sessionExpiredReason, setSessionExpiredReason] = useState<string | null>(null);
+  const [desktopProtectedStorage, setDesktopProtectedStorage] = useState(false);
 
   const [isBrowserOnline, setIsBrowserOnline] = useState(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
@@ -250,12 +401,17 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
   activeUserIdRef.current = activeUserId;
   const authTokenRef = useRef(authToken);
   authTokenRef.current = authToken;
+  const refreshTokenRef = useRef<string | null>(
+    typeof window !== 'undefined' ? window.localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY) : null
+  );
+  const singleFlightRefreshRef = useRef<Promise<boolean> | null>(null);
   const workspaceIdRef = useRef(workspaceId);
   workspaceIdRef.current = workspaceId;
   const stateRef = useRef(state);
   stateRef.current = state;
   const inFlightKeysRef = useRef<Set<string>>(new Set());
   const deviceIdRef = useRef<string>(getOrCreateDeviceId());
+  const appTypeRef = useRef<'web' | 'desktop'>(getClientAppType());
 
   const openOnboarding = useCallback(
     (initialStage: 'splash' | 'company' | 'property' | 'units' = 'splash', isLockMode = false) => {
@@ -268,32 +424,54 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     setOnboardingConfig((prev) => ({ ...prev, open: false }));
   }, []);
 
+  const [navHistory, setNavHistory] = useState<PrimaryNavSection[]>([]);
+  const activeNavRef = useRef<PrimaryNavSection>(activeNav);
+  activeNavRef.current = activeNav;
+
   const setActiveNav = useCallback((nav: NavSection) => {
+    let resolved: PrimaryNavSection;
     if (nav === 'leasing' || nav === 'finance' || nav === 'accounting') {
       setLeasingFinanceTab(nav);
-      setActiveNavState('leasing_finance');
-      return;
+      resolved = 'leasing_finance';
+    } else if (nav === 'admin') {
+      resolved = 'reports';
+    } else {
+      if (nav === 'settings' && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('aqar:settings-hub'));
+      }
+      resolved = nav;
     }
-    if (nav === 'admin') {
-      setActiveNavState('reports');
-      return;
+    const prev = activeNavRef.current;
+    if (prev !== resolved) {
+      setNavHistory((hist) => [...hist.slice(-14), prev]);
     }
-    if (nav === 'settings' && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('aqar:settings-hub'));
-    }
-    setActiveNavState(nav);
+    setActiveNavState(resolved);
   }, []);
+
+  const goBackNav = useCallback(() => {
+    setNavHistory((hist) => {
+      if (hist.length > 0) {
+        const prev = hist[hist.length - 1];
+        setActiveNavState(prev);
+        return hist.slice(0, -1);
+      }
+      setActiveNavState('dashboard');
+      return hist;
+    });
+  }, []);
+
+  const canGoBackNav = activeNav !== 'dashboard' || navHistory.length > 0;
 
   const startLeasingWizardForUnit = useCallback((unitId: string) => {
     setLeasingWizardUnitId(unitId);
     setLeasingFinanceTab('leasing');
-    setActiveNavState('leasing_finance');
-  }, []);
+    setActiveNav('leasing_finance');
+  }, [setActiveNav]);
 
   const openLeadsHub = useCallback(() => {
     setTenantsTabHint('leads');
-    setActiveNavState('tenants');
-  }, []);
+    setActiveNav('tenants');
+  }, [setActiveNav]);
 
   const setWorkspaceId = useCallback((nextWorkspaceId: string) => {
     const clean = normalizeWorkspaceSlug(nextWorkspaceId);
@@ -304,28 +482,128 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const persistAuthToken = useCallback((token: string | null, userId?: string) => {
-    setAuthToken(token);
-    authTokenRef.current = token;
+  const saveRememberedIdentifier = useCallback((identifier: string | null) => {
+    const clean = (identifier || '').trim();
+    setRememberedIdentifier(clean);
     if (typeof window !== 'undefined') {
-      if (token) window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
-      else window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-      if (userId) window.localStorage.setItem(USER_STORAGE_KEY, userId);
-    }
-    if (userId) {
-      setActiveUserId(userId);
-      activeUserIdRef.current = userId;
+      if (clean) window.localStorage.setItem(REMEMBERED_IDENTIFIER_KEY, clean);
+      else window.localStorage.removeItem(REMEMBERED_IDENTIFIER_KEY);
     }
   }, []);
+
+  const clearSessionExpiredReason = useCallback(() => {
+    setSessionExpiredReason(null);
+  }, []);
+
+  const persistAuthToken = useCallback(
+    (
+      token: string | null,
+      userId?: string,
+      rememberMe?: boolean,
+      sessionExtras?: {
+        refreshToken?: string | null;
+        expiresAt?: string;
+        refreshExpiresAt?: string;
+        workspaceId?: string;
+      }
+    ) => {
+      setAuthToken(token);
+      authTokenRef.current = token;
+      if (typeof window !== 'undefined') {
+        if (token) {
+          const useLocal =
+            rememberMe !== undefined
+              ? rememberMe
+              : Boolean(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)) ||
+                Boolean(window.localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY)) ||
+                Boolean(window.localStorage.getItem(DESKTOP_ENCRYPTED_REFRESH_KEY)) ||
+                !window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+          if (useLocal) {
+            window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+            window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+            const offlineExpiry =
+              sessionExtras?.refreshExpiresAt ||
+              sessionExtras?.expiresAt ||
+              new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
+            const targetWs = sessionExtras?.workspaceId || workspaceIdRef.current;
+            const targetUid = userId || activeUserIdRef.current;
+            window.localStorage.setItem(
+              TRUSTED_OFFLINE_META_KEY,
+              JSON.stringify({
+                workspaceId: targetWs,
+                userId: targetUid,
+                expiresAt: offlineExpiry,
+                rememberMe: true,
+              } satisfies TrustedOfflineMeta)
+            );
+            if (sessionExtras?.refreshToken) {
+              const rToken = sessionExtras.refreshToken;
+              refreshTokenRef.current = rToken;
+              if (window.aqarDesktop?.protectSecret) {
+                void window.aqarDesktop.protectSecret(rToken).then((res) => {
+                  if (res?.protected && res.cipher) {
+                    window.localStorage.setItem(DESKTOP_ENCRYPTED_REFRESH_KEY, res.cipher);
+                    window.localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+                    setDesktopProtectedStorage(true);
+                  } else {
+                    window.localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, rToken);
+                    window.localStorage.removeItem(DESKTOP_ENCRYPTED_REFRESH_KEY);
+                    setDesktopProtectedStorage(false);
+                  }
+                });
+              } else {
+                window.localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, rToken);
+              }
+            }
+          } else {
+            window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+            window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+            window.localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+            window.localStorage.removeItem(DESKTOP_ENCRYPTED_REFRESH_KEY);
+            window.localStorage.removeItem(TRUSTED_OFFLINE_META_KEY);
+            refreshTokenRef.current = null;
+          }
+        } else {
+          window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+          window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+          window.localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+          window.localStorage.removeItem(DESKTOP_ENCRYPTED_REFRESH_KEY);
+          window.localStorage.removeItem(TRUSTED_OFFLINE_META_KEY);
+          refreshTokenRef.current = null;
+        }
+        if (userId) window.localStorage.setItem(USER_STORAGE_KEY, userId);
+      }
+      if (userId) {
+        setActiveUserId(userId);
+        activeUserIdRef.current = userId;
+      }
+    },
+    []
+  );
 
   const cacheStateSnapshot = useCallback((nextState: AqarDatabaseState) => {
     setState(nextState);
     stateRef.current = nextState;
-    setCompanyBranding({
+    const branding: CompanyBrandingSummary = {
       nameAr: nextState.settings.nameAr,
       nameEn: nextState.settings.nameEn,
       logoDataUrl: nextState.settings.logoDataUrl,
-    });
+    };
+    setCompanyBranding(branding);
+    const meta: LastCompanyMeta = {
+      workspaceId: workspaceIdRef.current,
+      nameAr: nextState.settings.nameAr,
+      nameEn: nextState.settings.nameEn,
+      logoDataUrl: nextState.settings.logoDataUrl,
+    };
+    setLastCompanyMeta(meta);
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(LAST_COMPANY_META_KEY, JSON.stringify(meta));
+      } catch {
+        // ignore storage quota errors on large logos
+      }
+    }
     void saveCachedStateIdb(nextState, workspaceIdRef.current);
   }, []);
 
@@ -440,20 +718,127 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     return state.users.find((u) => u.id === activeUserId) || state.users[0] || null;
   }, [state, activeUserId]);
 
+  const applyLandingRoute = useCallback(
+    (
+      nextState: AqarDatabaseState | null | undefined,
+      user: StaffUser | null | undefined,
+      explicitLanding?: { nav: string; leasingFinanceTab?: 'leasing' | 'finance' | 'accounting' },
+      forceApply = true
+    ) => {
+      if (!nextState || !user) return;
+      if (!forceApply && activeNavRef.current !== 'dashboard') return;
+      const target = explicitLanding || getRecommendedLandingNav(nextState, user);
+      const navName = (target?.nav || 'dashboard') as PrimaryNavSection;
+      if (target?.leasingFinanceTab) {
+        setLeasingFinanceTab(target.leasingFinanceTab);
+      }
+      if (navName === 'leasing_finance' || userCanAccessNav(nextState, user, navName)) {
+        setNavHistory([]);
+        setActiveNavState(navName);
+      } else {
+        setNavHistory([]);
+        setActiveNavState('dashboard');
+      }
+    },
+    []
+  );
+
+  const loadStoredRefreshToken = useCallback(async (): Promise<string | null> => {
+    if (refreshTokenRef.current) return refreshTokenRef.current;
+    if (typeof window === 'undefined') return null;
+    const plain = window.localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+    if (plain) {
+      refreshTokenRef.current = plain;
+      return plain;
+    }
+    const cipher = window.localStorage.getItem(DESKTOP_ENCRYPTED_REFRESH_KEY);
+    if (cipher && window.aqarDesktop?.unprotectSecret) {
+      const decrypted = await window.aqarDesktop.unprotectSecret(cipher);
+      if (decrypted) {
+        refreshTokenRef.current = decrypted;
+        setDesktopProtectedStorage(true);
+        return decrypted;
+      }
+    }
+    return null;
+  }, []);
+
+  const refreshSession = useCallback(async (): Promise<boolean> => {
+    if (singleFlightRefreshRef.current) {
+      return singleFlightRefreshRef.current;
+    }
+    const runner = (async () => {
+      try {
+        const storedRefresh = await loadStoredRefreshToken();
+        const res = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-workspace-id': workspaceIdRef.current,
+          },
+          body: JSON.stringify(storedRefresh ? { refreshToken: storedRefresh } : {}),
+        });
+        if (!res.ok) {
+          return false;
+        }
+        const data = await res.json();
+        if (!data?.authenticated || !data?.token || !data?.user) {
+          return false;
+        }
+        persistAuthToken(data.token, data.user.id, data.rememberMe !== false, {
+          refreshToken: data.refreshToken,
+          expiresAt: data.expiresAt,
+          refreshExpiresAt: data.refreshExpiresAt,
+          workspaceId: data.workspaceId || workspaceIdRef.current,
+        });
+        setSessionExpiredReason(null);
+        setIsAuthenticated(true);
+        setIsStaticMode(false);
+        if (data.state) {
+          cacheStateSnapshot(data.state);
+          applyLandingRoute(data.state, data.user, data.landingNav, false);
+        }
+        return true;
+      } catch {
+        return false;
+      } finally {
+        singleFlightRefreshRef.current = null;
+      }
+    })();
+    singleFlightRefreshRef.current = runner;
+    return runner;
+  }, [applyLandingRoute, cacheStateSnapshot, loadStoredRefreshToken, persistAuthToken]);
+
   const apiFetch = useCallback(
     async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const headers = new Headers(init?.headers || undefined);
-      if (authTokenRef.current && !headers.has('Authorization')) {
-        headers.set('Authorization', `Bearer ${authTokenRef.current}`);
+      const doFetch = () => {
+        const headers = new Headers(init?.headers || undefined);
+        if (authTokenRef.current && !headers.has('Authorization')) {
+          headers.set('Authorization', `Bearer ${authTokenRef.current}`);
+        }
+        if (!headers.has('x-workspace-id')) {
+          headers.set('x-workspace-id', workspaceIdRef.current);
+        }
+        if (!headers.has('x-device-id')) {
+          headers.set('x-device-id', deviceIdRef.current);
+        }
+        return fetch(input, {
+          ...init,
+          credentials: 'include',
+          headers,
+        });
+      };
+
+      let res = await doFetch();
+      const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
+      if (res.status === 401 && !urlStr.includes('/api/auth/refresh') && !urlStr.includes('/api/auth/login')) {
+        const refreshed = await refreshSession();
+        if (refreshed) {
+          res = await doFetch();
+        }
       }
-      if (!headers.has('x-workspace-id')) {
-        headers.set('x-workspace-id', workspaceIdRef.current);
-      }
-      const res = await fetch(input, {
-        ...init,
-        credentials: 'include',
-        headers,
-      });
+
       if (res.status === 401) {
         const clone = res.clone();
         try {
@@ -461,6 +846,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
           if (body?.code === 'AUTH_REQUIRED') {
             persistAuthToken(null);
             setIsAuthenticated(false);
+            setSessionExpiredReason(
+              body?.error || 'انتهت صلاحية الجلسة أو تم إنهاؤها — يرجى تسجيل الدخول للمتابعة'
+            );
           }
         } catch {
           // ignore non-json 401
@@ -468,7 +856,7 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       }
       return res;
     },
-    [persistAuthToken]
+    [persistAuthToken, refreshSession]
   );
 
   const fetchState = useCallback(async () => {
@@ -489,7 +877,16 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       if (data.presence) setPresence(data.presence);
     } catch {
       const cached = await loadCachedStateIdb(workspaceIdRef.current);
-      if (cached && authTokenRef.current) {
+      const trustedMeta =
+        typeof window !== 'undefined'
+          ? safeParseJson<TrustedOfflineMeta>(window.localStorage.getItem(TRUSTED_OFFLINE_META_KEY))
+          : null;
+      const validOfflineTrust =
+        Boolean(cached) &&
+        Boolean(trustedMeta?.rememberMe) &&
+        trustedMeta?.workspaceId === workspaceIdRef.current &&
+        (!trustedMeta?.expiresAt || Date.parse(trustedMeta.expiresAt) > Date.now());
+      if (cached && validOfflineTrust) {
         cacheStateSnapshot(cached);
         setWsStatus('offline');
       }
@@ -498,17 +895,26 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     }
   }, [apiFetch, cacheStateSnapshot]);
 
-  // Initial bootstrap: IndexedDB migration + Session check
+  // Initial bootstrap: IndexedDB migration + Session check (with Refresh + Strict Offline Policy)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const activeWs = workspaceIdRef.current;
+      const hadPriorSessionHint =
+        typeof window !== 'undefined' &&
+        Boolean(
+          authTokenRef.current ||
+            window.localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY) ||
+            window.localStorage.getItem(DESKTOP_ENCRYPTED_REFRESH_KEY) ||
+            window.localStorage.getItem(TRUSTED_OFFLINE_META_KEY)
+        );
       try {
         const { migratedState, migratedQueue } = await migrateLegacyLocalStorageToIdb();
-        const [idbState, idbQueue, savedLastSync] = await Promise.all([
+        const [idbState, idbQueue, savedLastSync, storedRefresh] = await Promise.all([
           loadCachedStateIdb(activeWs),
           loadOfflineQueueIdb(activeWs),
           loadMetaIdb<string>(`lastSyncAt:${activeWs}`),
+          loadStoredRefreshToken(),
         ]);
         if (cancelled) return;
         const effectiveQueue = idbQueue.length > 0 ? idbQueue : activeWs === 'default' ? migratedQueue : [];
@@ -523,6 +929,7 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
         // Check live session against server/Worker
         const headers: Record<string, string> = {
           'x-workspace-id': activeWs,
+          'x-device-id': deviceIdRef.current,
         };
         if (authTokenRef.current) {
           headers['Authorization'] = `Bearer ${authTokenRef.current}`;
@@ -557,26 +964,60 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (sessionData.authenticated && sessionData.user) {
-          persistAuthToken(sessionData.token || authTokenRef.current, sessionData.user.id);
+          persistAuthToken(sessionData.token || authTokenRef.current, sessionData.user.id, undefined, {
+            workspaceId: activeWs,
+          });
           setIsAuthenticated(true);
           setIsStaticMode(false);
+          setSessionExpiredReason(null);
           await fetchState();
+          if (stateRef.current && sessionData.user) {
+            applyLandingRoute(stateRef.current, sessionData.user, sessionData.landingNav, false);
+          }
+        } else if (storedRefresh || hadPriorSessionHint) {
+          const refreshed = await refreshSession();
+          if (cancelled) return;
+          if (refreshed) {
+            setIsAuthenticated(true);
+            setIsStaticMode(false);
+            if (!stateRef.current) await fetchState();
+            setLoading(false);
+          } else {
+            persistAuthToken(null);
+            setIsAuthenticated(false);
+            setSessionExpiredReason('انتهت صلاحية الجلسة السابقة أو تم إنهاؤها — يرجى تسجيل الدخول');
+            setLoading(false);
+          }
         } else {
           persistAuthToken(null);
           setIsAuthenticated(false);
           setLoading(false);
         }
       } catch {
-        // Offline startup with prior authenticated device session stored in IndexedDB
+        // Strict Offline Startup: cached snapshot alone NEVER grants login without an unexpired trusted session
         if (cancelled) return;
         const cached = await loadCachedStateIdb(activeWs);
-        if (cached && authTokenRef.current) {
+        const trustedMeta =
+          typeof window !== 'undefined'
+            ? safeParseJson<TrustedOfflineMeta>(window.localStorage.getItem(TRUSTED_OFFLINE_META_KEY))
+            : null;
+        const hasUnexpiredTrust =
+          Boolean(cached) &&
+          Boolean(trustedMeta?.rememberMe) &&
+          trustedMeta?.workspaceId === activeWs &&
+          (!trustedMeta?.expiresAt || Date.parse(trustedMeta.expiresAt) > Date.now()) &&
+          Boolean(authTokenRef.current || refreshTokenRef.current);
+
+        if (cached && hasUnexpiredTrust) {
           cacheStateSnapshot(cached);
           setIsAuthenticated(true);
           setWsStatus('offline');
           setLoading(false);
         } else {
           setIsAuthenticated(false);
+          if (hadPriorSessionHint) {
+            setSessionExpiredReason('الجلسة غير موثقة للعمل دون اتصال — اتصل بالإنترنت لتجديد تسجيل الدخول');
+          }
           setWsStatus('offline');
           setLoading(false);
         }
@@ -590,98 +1031,266 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [cacheStateSnapshot, fetchState, persistAuthToken]);
+  }, [applyLandingRoute, cacheStateSnapshot, fetchState, loadStoredRefreshToken, persistAuthToken, refreshSession]);
 
   const refreshState = useCallback(async () => {
     await fetchState();
   }, [fetchState]);
 
+  const consumeAuthPayload = useCallback(
+    async (
+      data: Record<string, unknown>,
+      rememberMeFlag: boolean,
+      fallbackWorkspaceId: string
+    ): Promise<LoginActionResult> => {
+      if (data.requiresCompanySelection) {
+        return {
+          ok: false,
+          requiresCompanySelection: true,
+          selectionToken: String(data.selectionToken || ''),
+          companies: Array.isArray(data.companies) ? (data.companies as CompanyDiscoveryOption[]) : [],
+        };
+      }
+      if (data.requiresMfa) {
+        return {
+          ok: false,
+          requiresMfa: true,
+          mfaChallenge: {
+            challengeToken: String(data.challengeToken || ''),
+            reason: String(data.reason || 'new_device'),
+            workspaceId: String(data.workspaceId || fallbackWorkspaceId),
+            companyBranding: data.companyBranding as CompanyBrandingSummary | undefined,
+            maskedEmail: String(data.maskedEmail || '***'),
+            expiresAt: String(data.expiresAt || ''),
+            deliveryNotice: String(data.deliveryNotice || ''),
+            localSimulationCode: data.localSimulationCode ? String(data.localSimulationCode) : undefined,
+          },
+        };
+      }
+
+      const targetWs = normalizeWorkspaceSlug(String(data.workspaceId || fallbackWorkspaceId));
+      setWorkspaceId(targetWs);
+      const userObj = data.user as StaffUser | undefined;
+      const effectiveRemember =
+        typeof data.rememberMe === 'boolean' ? data.rememberMe : rememberMeFlag;
+      persistAuthToken((data.token as string) || null, userObj?.id, effectiveRemember, {
+        refreshToken: (data.refreshToken as string) || null,
+        expiresAt: data.expiresAt as string | undefined,
+        refreshExpiresAt: data.refreshExpiresAt as string | undefined,
+        workspaceId: targetWs,
+      });
+      setSessionExpiredReason(null);
+      setIsAuthenticated(true);
+      setIsStaticMode(false);
+      if (data.state) {
+        cacheStateSnapshot(data.state as AqarDatabaseState);
+        applyLandingRoute(
+          data.state as AqarDatabaseState,
+          userObj,
+          data.landingNav as { nav: string; leasingFinanceTab?: 'leasing' | 'finance' | 'accounting' } | undefined,
+          true
+        );
+      } else {
+        await fetchState();
+        if (stateRef.current && userObj) {
+          applyLandingRoute(
+            stateRef.current,
+            userObj,
+            data.landingNav as { nav: string; leasingFinanceTab?: 'leasing' | 'finance' | 'accounting' } | undefined,
+            true
+          );
+        }
+      }
+      setLoading(false);
+      return { ok: true };
+    },
+    [applyLandingRoute, cacheStateSnapshot, fetchState, persistAuthToken, setWorkspaceId]
+  );
+
   const loginWithPassword = useCallback(
     async (
       identifier: string,
       password: string,
-      workspaceOverride?: string
-    ): Promise<{ ok: boolean; error?: string }> => {
+      workspaceOverride?: string,
+      rememberMe = true,
+      opts?: { autoDiscover?: boolean; selectedWorkspaceId?: string }
+    ): Promise<LoginActionResult> => {
       try {
         const wsTarget = workspaceOverride ? normalizeWorkspaceSlug(workspaceOverride) : workspaceIdRef.current;
         if (workspaceOverride) setWorkspaceId(wsTarget);
+        const appType = appTypeRef.current;
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'x-workspace-id': wsTarget,
+            'x-workspace-id': opts?.selectedWorkspaceId ? normalizeWorkspaceSlug(opts.selectedWorkspaceId) : wsTarget,
+            'x-device-id': deviceIdRef.current,
           },
           body: JSON.stringify({
             identifier,
             password,
-            deviceName: typeof navigator !== 'undefined' ? navigator.platform || 'Web Terminal' : 'Web Terminal',
+            rememberMe,
+            autoDiscover: opts?.autoDiscover,
+            selectedWorkspaceId: opts?.selectedWorkspaceId,
+            appType,
+            deviceId: deviceIdRef.current,
+            deviceName: getReadableDeviceName(appType),
           }),
         });
         const data = await res.json();
         if (!res.ok) {
-          return { ok: false, error: data?.error || 'تعذر تسجيل الدخول' };
+          return {
+            ok: false,
+            error: data?.error || 'بيانات الدخول غير صحيحة',
+            retryAfterSec: data?.retryAfterSec,
+          };
         }
-        persistAuthToken(data.token || null, data.user?.id);
-        setIsAuthenticated(true);
-        setIsStaticMode(false);
-        if (data.state) {
-          cacheStateSnapshot(data.state);
-        } else {
-          await fetchState();
-        }
-        setLoading(false);
-        return { ok: true };
+        return await consumeAuthPayload(data, rememberMe, wsTarget);
       } catch {
         return { ok: false, error: 'تعذر الوصول إلى الخادم لتسجيل الدخول' };
       }
     },
-    [cacheStateSnapshot, fetchState, persistAuthToken, setWorkspaceId]
+    [consumeAuthPayload, setWorkspaceId]
   );
 
   const loginWithPin = useCallback(
     async (
-      userId: string,
+      userIdOrIdentifier: string,
       pin: string,
-      workspaceOverride?: string
-    ): Promise<{ ok: boolean; error?: string }> => {
+      workspaceOverride?: string,
+      rememberMe = true,
+      opts?: { autoDiscover?: boolean; selectedWorkspaceId?: string }
+    ): Promise<LoginActionResult> => {
       try {
         const wsTarget = workspaceOverride ? normalizeWorkspaceSlug(workspaceOverride) : workspaceIdRef.current;
         if (workspaceOverride) setWorkspaceId(wsTarget);
+        const appType = appTypeRef.current;
         const res = await fetch('/api/auth/login-pin', {
           method: 'POST',
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'x-workspace-id': wsTarget,
+            'x-workspace-id': opts?.selectedWorkspaceId ? normalizeWorkspaceSlug(opts.selectedWorkspaceId) : wsTarget,
+            'x-device-id': deviceIdRef.current,
           },
           body: JSON.stringify({
-            userId,
-            identifier: userId,
+            userId: userIdOrIdentifier,
+            identifier: userIdOrIdentifier,
             pin,
-            deviceName: typeof navigator !== 'undefined' ? navigator.platform || 'Web Terminal' : 'Web Terminal',
+            rememberMe,
+            autoDiscover: opts?.autoDiscover,
+            selectedWorkspaceId: opts?.selectedWorkspaceId,
+            appType,
+            deviceId: deviceIdRef.current,
+            deviceName: getReadableDeviceName(appType),
           }),
         });
         const data = await res.json();
         if (!res.ok) {
-          return { ok: false, error: data?.error || 'رمز PIN غير صحيح' };
+          return {
+            ok: false,
+            error: data?.error || 'رمز PIN غير صحيح',
+            retryAfterSec: data?.retryAfterSec,
+          };
         }
-        persistAuthToken(data.token || null, data.user?.id);
-        setIsAuthenticated(true);
-        setIsStaticMode(false);
-        if (data.state) {
-          cacheStateSnapshot(data.state);
-        } else {
-          await fetchState();
-        }
-        setLoading(false);
-        return { ok: true };
+        return await consumeAuthPayload(data, rememberMe, wsTarget);
       } catch {
         return { ok: false, error: 'تعذر الوصول إلى الخادم للتحقق من الرمز' };
       }
     },
-    [cacheStateSnapshot, fetchState, persistAuthToken, setWorkspaceId]
+    [consumeAuthPayload, setWorkspaceId]
   );
+
+  const selectCompanyForLogin = useCallback(
+    async (selectionToken: string, selectedWorkspaceId: string, rememberMe = true): Promise<LoginActionResult> => {
+      try {
+        const appType = appTypeRef.current;
+        const res = await fetch('/api/auth/select-company', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-device-id': deviceIdRef.current,
+          },
+          body: JSON.stringify({
+            selectionToken,
+            workspaceId: selectedWorkspaceId,
+            rememberMe,
+            appType,
+            deviceId: deviceIdRef.current,
+            deviceName: getReadableDeviceName(appType),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return { ok: false, error: data?.error || 'تعذر فتح مساحة عمل الشركة المحددة' };
+        }
+        return await consumeAuthPayload(data, rememberMe, selectedWorkspaceId);
+      } catch {
+        return { ok: false, error: 'تعذر الاتصال بالخادم لاختيار الشركة' };
+      }
+    },
+    [consumeAuthPayload]
+  );
+
+  const verifyMfaForLogin = useCallback(
+    async (challengeToken: string, code: string, trustDevice = true): Promise<LoginActionResult> => {
+      try {
+        const appType = appTypeRef.current;
+        const res = await fetch('/api/auth/mfa/verify', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-device-id': deviceIdRef.current,
+          },
+          body: JSON.stringify({
+            challengeToken,
+            code,
+            trustDevice,
+            deviceId: deviceIdRef.current,
+            deviceName: getReadableDeviceName(appType),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return {
+            ok: false,
+            error: data?.error || 'رمز التحقق الإضافي غير صحيح',
+            retryAfterSec: data?.retryAfterSec,
+          };
+        }
+        return await consumeAuthPayload(data, data.rememberMe !== false, String(data.workspaceId || workspaceIdRef.current));
+      } catch {
+        return { ok: false, error: 'تعذر الاتصال بالخادم لإتمام التحقق الإضافي' };
+      }
+    },
+    [consumeAuthPayload]
+  );
+
+  const resendMfaCode = useCallback(async (challengeToken: string) => {
+    try {
+      const res = await fetch('/api/auth/mfa/resend', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: data?.error || 'تعذر إعادة إرسال رمز التحقق' };
+      }
+      return {
+        ok: true,
+        deliveryNotice: data.deliveryNotice as string | undefined,
+        localSimulationCode: data.localSimulationCode ? String(data.localSimulationCode) : undefined,
+        expiresAt: data.expiresAt as string | undefined,
+      };
+    } catch {
+      return { ok: false, error: 'تعذر الاتصال بالخادم' };
+    }
+  }, []);
 
   const provisionWorkspace = useCallback(
     async (params: {
@@ -699,16 +1308,20 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
         if (cleanSlug === 'default') {
           return { ok: false, error: 'اختر معرّف شركة مخصصاً (3 أحرف إنجليزية وأرقام على الأقل)' };
         }
+        const appType = appTypeRef.current;
         const res = await fetch('/api/workspaces/provision', {
           method: 'POST',
           credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
             'x-workspace-id': cleanSlug,
+            'x-device-id': deviceIdRef.current,
           },
           body: JSON.stringify({
             ...params,
-            deviceName: typeof navigator !== 'undefined' ? navigator.platform || 'Web Terminal' : 'Web Terminal',
+            appType,
+            deviceId: deviceIdRef.current,
+            deviceName: getReadableDeviceName(appType),
           }),
         });
         const data = await res.json();
@@ -716,7 +1329,13 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
           return { ok: false, error: data?.error || 'تعذر تأسيس مساحة عمل الشركة' };
         }
         setWorkspaceId(cleanSlug);
-        persistAuthToken(data.token || null, data.user?.id);
+        persistAuthToken(data.token || null, data.user?.id, true, {
+          refreshToken: data.refreshToken || null,
+          expiresAt: data.expiresAt,
+          refreshExpiresAt: data.refreshExpiresAt,
+          workspaceId: cleanSlug,
+        });
+        setSessionExpiredReason(null);
         setIsAuthenticated(true);
         setIsStaticMode(false);
         if (data.state) cacheStateSnapshot(data.state);
@@ -745,6 +1364,28 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     stateRef.current = null;
     setPresence([]);
     setWsStatus('offline');
+    setNavHistory([]);
+    setActiveNavState('dashboard');
+  }, [apiFetch, persistAuthToken]);
+
+  const logoutAllDevices = useCallback(async () => {
+    try {
+      await apiFetch('/api/auth/logout-all', { method: 'POST' });
+    } catch {
+      // ignore offline logout-all failure
+    }
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    persistAuthToken(null);
+    setIsAuthenticated(false);
+    setState(null);
+    stateRef.current = null;
+    setPresence([]);
+    setWsStatus('offline');
+    setNavHistory([]);
+    setActiveNavState('dashboard');
   }, [apiFetch, persistAuthToken]);
 
   const changeCredentials = useCallback(
@@ -814,7 +1455,29 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
             return;
           }
           if (msg.type === 'state:init' || msg.type === 'state:updated') {
-            if (msg.state) cacheStateSnapshot(msg.state);
+            if (msg.state) {
+              cacheStateSnapshot(msg.state);
+              const nextState = msg.state as AqarDatabaseState;
+              const updatedMe = nextState.users.find((u) => u.id === activeUserIdRef.current);
+              if (updatedMe && (!updatedMe.active || (updatedMe.accountStatus && updatedMe.accountStatus !== 'نشط'))) {
+                setSessionExpiredReason('تم إيقاف الحساب أو سحب العضوية — تم إغلاق الجلسة');
+                void logout();
+                return;
+              }
+              if (
+                msg.type === 'state:updated' &&
+                updatedMe &&
+                activeNavRef.current !== 'dashboard' &&
+                activeNavRef.current !== 'profile' &&
+                !userCanAccessNav(nextState, updatedMe, activeNavRef.current)
+              ) {
+                pushToast(
+                  'info',
+                  lang === 'ar' ? 'تم تحديث صلاحياتك — تم تحويلك للقسم المتاح' : 'Your permissions were updated'
+                );
+                applyLandingRoute(nextState, updatedMe, undefined, true);
+              }
+            }
             if (msg.presence) setPresence(msg.presence);
             if (msg.type === 'state:updated' && msg.actorUserId !== activeUserIdRef.current && msg.summary) {
               pushToast('info', `تحديث مباشر: ${msg.summary}`);
@@ -823,7 +1486,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
             setPresence(msg.sessions || []);
           } else if (msg.type === 'session:terminated') {
             if (!msg.userId || msg.userId === activeUserIdRef.current) {
-              pushToast('error', `تم إنهاء جلستك عن بُعد بواسطة ${msg.terminatedBy || 'الإدارة'}: ${msg.reason || ''}`);
+              const reasonText = String(msg.reason || 'تم إنهاء جلستك عن بُعد');
+              setSessionExpiredReason(reasonText);
+              pushToast('error', reasonText);
               void logout();
             }
           }
@@ -851,7 +1516,7 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       wsRef.current?.close();
     };
-  }, [isAuthenticated, isOfflineSimulated, isStaticMode, pushToast, cacheStateSnapshot, logout]);
+  }, [isAuthenticated, isOfflineSimulated, isStaticMode, lang, pushToast, cacheStateSnapshot, applyLandingRoute, logout]);
 
   // Identify updated token on WS when switching users
   useEffect(() => {
@@ -910,15 +1575,57 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
   const hasPermission = useCallback(
     (perm: PermissionKey) => {
       if (!state || !currentUser) return false;
-      const perms = state.rolePermissions[currentUser.role] || [];
-      return perms.includes(perm);
+      return userHasLegacyPermission(state, currentUser, perm);
     },
     [state, currentUser]
   );
 
+  const hasModulePermission = useCallback(
+    (module: PermissionModuleKey, action: PermissionLevel = 'view') => {
+      if (!state || !currentUser) return false;
+      return userHasModuleAction(state, currentUser, module, action);
+    },
+    [state, currentUser]
+  );
+
+  const canAccessNav = useCallback(
+    (nav: NavSection) => {
+      if (!state || !currentUser) return false;
+      return userCanAccessNav(state, currentUser, nav);
+    },
+    [state, currentUser]
+  );
+
+  const verifySessionBeforeSync = useCallback(async (): Promise<boolean> => {
+    try {
+      const meRes = await apiFetch('/api/auth/me');
+      if (!meRes.ok) {
+        if (meRes.status === 401 || meRes.status === 403) {
+          pushToast(
+            'error',
+            lang === 'ar'
+              ? 'تم رفض مزامنة العمليات المحلية لأن الحساب موقوف أو انتهت صلاحية الجلسة'
+              : 'Sync blocked: account suspended or session expired'
+          );
+          if (meRes.status === 401) {
+            setSessionExpiredReason('انتهت صلاحية الجلسة — سجّل الدخول مجدداً قبل مزامنة العمليات المحلية');
+            setIsAuthenticated(false);
+          }
+        }
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, lang, pushToast]);
+
   const syncOfflineQueue = useCallback(async () => {
     if (!isAuthenticated || offlineQueue.length === 0 || isOfflineSimulated) return;
     try {
+      const sessionValid = await verifySessionBeforeSync();
+      if (!sessionValid) return;
+
       const result = await SyncEngine.uploadPendingOperations(
         offlineQueue,
         stateRef.current?.lastUpdatedAt,
@@ -948,7 +1655,7 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // keep queued items for retry
     }
-  }, [isAuthenticated, offlineQueue, isOfflineSimulated, lang, pushToast, fetchState, cacheStateSnapshot]);
+  }, [isAuthenticated, offlineQueue, isOfflineSimulated, lang, pushToast, fetchState, cacheStateSnapshot, verifySessionBeforeSync]);
 
   const runFullSync = useCallback(async (): Promise<SyncBatchUploadResult | null> => {
     if (isOfflineSimulated) {
@@ -956,6 +1663,9 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
     try {
+      const sessionValid = await verifySessionBeforeSync();
+      if (!sessionValid) return null;
+
       const uploadResult = await SyncEngine.uploadPendingOperations(
         offlineQueue,
         stateRef.current?.lastUpdatedAt,
@@ -989,7 +1699,7 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       pushToast('error', (err as Error).message);
       return null;
     }
-  }, [isOfflineSimulated, offlineQueue, lastSyncAt, lang, pushToast, cacheStateSnapshot]);
+  }, [isOfflineSimulated, offlineQueue, lastSyncAt, lang, pushToast, cacheStateSnapshot, verifySessionBeforeSync]);
 
   const toggleOfflineSimulation = useCallback(() => {
     setIsOfflineSimulated((prev) => {
@@ -1054,6 +1764,15 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (isOfflineSimulated || !navigator.onLine) {
+        if (SERVER_ONLY_OFFLINE_BLOCKED_PREFIXES.some((prefix) => endpoint.startsWith(prefix))) {
+          pushToast(
+            'error',
+            lang === 'ar'
+              ? 'هذا الإجراء الأمني أو الإداري يتطلب اتصالاً مباشراً بالخادم ولا يمكن تنفيذه دون إنترنت'
+              : 'This security or admin action requires an active server connection'
+          );
+          return null;
+        }
         const target = extractEntityTarget(endpoint, body);
         const revKey = target.entityType && target.entityId ? `${target.entityType}:${target.entityId}` : undefined;
         const baseRevision = revKey ? stateRef.current?.entityRevisions?.[revKey] : undefined;
@@ -1131,6 +1850,15 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
         if (data.state) cacheStateSnapshot(data.state);
         return data as T;
       } catch {
+        if (SERVER_ONLY_OFFLINE_BLOCKED_PREFIXES.some((prefix) => endpoint.startsWith(prefix))) {
+          pushToast(
+            'error',
+            lang === 'ar'
+              ? 'تعذر الوصول للخادم — لا يمكن حفظ التغييرات الأمنية أو الإدارية محلياً'
+              : 'Server unreachable — security/admin actions cannot be queued offline'
+          );
+          return null;
+        }
         const target = extractEntityTarget(endpoint, body);
         const revKey = target.entityType && target.entityId ? `${target.entityType}:${target.entityId}` : undefined;
         const baseRevision = revKey ? stateRef.current?.entityRevisions?.[revKey] : undefined;
@@ -1190,21 +1918,38 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       demoLoginEnabled,
       loginProfiles,
       companyBranding,
+      lastCompanyMeta,
+      rememberedIdentifier,
+      saveRememberedIdentifier,
+      sessionExpiredReason,
+      clearSessionExpiredReason,
+      appType: appTypeRef.current,
+      deviceId: deviceIdRef.current,
+      desktopProtectedStorage,
       loginWithPassword,
       loginWithPin,
+      selectCompanyForLogin,
+      verifyMfaForLogin,
+      resendMfaCode,
+      refreshSession,
       provisionWorkspace,
       logout,
+      logoutAllDevices,
       changeCredentials,
       apiFetch,
       currentUser,
       switchUser,
       hasPermission,
+      hasModulePermission,
+      canAccessNav,
       lang,
       setLang,
       theme,
       toggleTheme,
       activeNav,
       setActiveNav,
+      canGoBackNav,
+      goBackNav,
       leasingFinanceTab,
       setLeasingFinanceTab,
       leasingWizardUnitId,
@@ -1253,21 +1998,36 @@ export function AqarProvider({ children }: { children: React.ReactNode }) {
       demoLoginEnabled,
       loginProfiles,
       companyBranding,
+      lastCompanyMeta,
+      rememberedIdentifier,
+      saveRememberedIdentifier,
+      sessionExpiredReason,
+      clearSessionExpiredReason,
+      desktopProtectedStorage,
       loginWithPassword,
       loginWithPin,
+      selectCompanyForLogin,
+      verifyMfaForLogin,
+      resendMfaCode,
+      refreshSession,
       provisionWorkspace,
       logout,
+      logoutAllDevices,
       changeCredentials,
       apiFetch,
       currentUser,
       switchUser,
       hasPermission,
+      hasModulePermission,
+      canAccessNav,
       lang,
       setLang,
       theme,
       toggleTheme,
       activeNav,
       setActiveNav,
+      canGoBackNav,
+      goBackNav,
       leasingFinanceTab,
       leasingWizardUnitId,
       startLeasingWizardForUnit,

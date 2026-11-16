@@ -22,9 +22,11 @@
     "typecheck:worker": "tsc -p worker/tsconfig.json --noEmit",
     "lint": "tsc --noEmit",
     "test:node": "node scripts/verify-system.mjs",
+    "test:workforce": "node scripts/verify-workforce.mjs",
+    "test:auth": "node scripts/verify-auth.mjs",
     "test:offline": "tsx scripts/verify-offline.mjs",
     "test:worker": "node scripts/verify-worker.mjs",
-    "test": "node scripts/verify-system.mjs && tsx scripts/verify-offline.mjs && node scripts/verify-worker.mjs"
+    "test": "node scripts/verify-system.mjs && node scripts/verify-workforce.mjs && node scripts/verify-auth.mjs && tsx scripts/verify-offline.mjs && node scripts/verify-worker.mjs"
   },
   "dependencies": {
     "@google/genai": "^3.3.0",

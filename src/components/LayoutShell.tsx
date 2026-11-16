@@ -27,11 +27,13 @@ import {
   CalendarCheck,
   SlidersHorizontal,
   LogOut,
+  UserCircle2,
 } from 'lucide-react';
 import { NavSection, PrimaryNavSection, useAqar } from '../context/AqarContext';
 import { formatDateTime } from '../utils/formatters';
 import { GlobalSearchModal, fuzzyMatchScore } from './GlobalSearchModal';
 import { PrintViewButton } from './PrintViewButton';
+import { UnifiedBackButton } from './ui/UnifiedComponents';
 
 interface LayoutShellProps {
   children: React.ReactNode;
@@ -42,12 +44,15 @@ export function LayoutShell({ children }: LayoutShellProps) {
     state,
     currentUser,
     switchUser,
+    canAccessNav,
+    demoLoginEnabled,
     lang,
     setLang,
     theme,
     toggleTheme,
     activeNav,
     setActiveNav,
+    goBackNav,
     wsStatus,
     isBrowserOnline,
     isOfflineSimulated,
@@ -74,10 +79,16 @@ export function LayoutShell({ children }: LayoutShellProps) {
         e.preventDefault();
         setGlobalSearchOpen((prev) => !prev);
       }
+      const isRtlBack = lang === 'ar' && e.altKey && e.key === 'ArrowRight';
+      const isLtrBack = lang !== 'ar' && e.altKey && e.key === 'ArrowLeft';
+      if ((isRtlBack || isLtrBack) && activeNav !== 'dashboard') {
+        e.preventDefault();
+        goBackNav();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [activeNav, goBackNav, lang]);
 
   const navItems: {
     id: PrimaryNavSection;
@@ -101,12 +112,14 @@ export function LayoutShell({ children }: LayoutShellProps) {
   ];
 
   const visibleNav = navItems.filter((item) => {
-    if (currentUser?.role === 'owner') return Boolean(item.ownerAllowed);
-    return true;
+    if (currentUser?.role === 'owner' && !item.ownerAllowed) return false;
+    return canAccessNav(item.id);
   });
 
   const activeNavMeta =
-    activeNav === 'about'
+    activeNav === 'profile'
+      ? { id: 'profile' as PrimaryNavSection, labelAr: 'الملف الشخصي', labelEn: 'Personal Profile' }
+      : activeNav === 'about'
       ? navItems.find((n) => n.id === 'settings') || navItems[0]
       : navItems.find((n) => n.id === activeNav) || navItems[0];
 
@@ -277,8 +290,8 @@ export function LayoutShell({ children }: LayoutShellProps) {
       <div className="flex-1 flex flex-col min-w-0 pb-16 lg:pb-0">
         {/* Top Bar (Compact 56px mobile / 64px desktop to honor 15% sticky viewport budget) */}
         <header className="sticky top-0 z-30 h-14 lg:h-16 px-3 lg:px-6 border-b border-slate-200 dark:border-white/10 glass-surface flex items-center justify-between gap-3 no-print">
-          {/* Active Page Title */}
-          <div className="flex items-center gap-3 min-w-0">
+          {/* Active Page Title + Unified Back Button */}
+          <div className="flex items-center gap-2.5 min-w-0">
             <div className="lg:hidden w-8 h-8 rounded-lg bg-gradient-to-br from-[#26478D] to-[#0A0E1A] text-white flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden border border-white/15">
               {state?.settings.logoDataUrl ? (
                 <img
@@ -296,6 +309,9 @@ export function LayoutShell({ children }: LayoutShellProps) {
                 />
               )}
             </div>
+            {activeNav !== 'dashboard' && (
+              <UnifiedBackButton onClick={goBackNav} lang={lang} compact />
+            )}
             <h1 className="text-base lg:text-lg font-semibold truncate">
               {lang === 'ar' ? activeNavMeta.labelAr : activeNavMeta.labelEn}
             </h1>
@@ -423,49 +439,88 @@ export function LayoutShell({ children }: LayoutShellProps) {
               </button>
             )}
 
-            {/* Role / Active User Switcher */}
+            {/* Profile & Account Switcher */}
             <div className="relative">
               <button
                 onClick={() => {
                   setUserMenuOpen((v) => !v);
                   setNotifOpen(false);
                 }}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 text-xs font-medium cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.04] hover:bg-slate-100 dark:hover:bg-white/10 text-xs font-medium cursor-pointer whitespace-nowrap shrink-0"
               >
-                <span className="max-w-[110px] truncate">{currentUser?.roleLabelAr || 'المستخدم'}</span>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                {currentUser?.avatarDataUrl ? (
+                  <img
+                    src={currentUser.avatarDataUrl}
+                    alt={currentUser.nameAr}
+                    className="w-5 h-5 rounded-full object-cover shrink-0"
+                  />
+                ) : (
+                  <UserCircle2 className="w-4 h-4 text-[#26478D] dark:text-blue-400 shrink-0" />
+                )}
+                <span className="max-w-[120px] truncate">{currentUser?.nameAr || currentUser?.roleLabelAr || 'المستخدم'}</span>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               </button>
 
               {userMenuOpen && state && (
                 <div className="absolute end-0 top-full mt-2 w-72 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#13192B] shadow-2xl overflow-hidden z-50">
-                  <div className="px-4 py-2.5 border-b border-slate-100 dark:border-white/10 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                    {lang === 'ar' ? 'تبديل حساب الموظف / الصلاحيات' : 'Switch Active Team Role'}
+                  <div className="px-4 py-3 border-b border-slate-100 dark:border-white/10 space-y-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {lang === 'ar' ? currentUser?.nameAr : currentUser?.nameEn}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        {lang === 'ar' ? currentUser?.roleLabelAr : currentUser?.roleLabelEn}
+                        {currentUser?.jobTitle ? ` · ${currentUser.jobTitle}` : ''}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        setActiveNav('profile');
+                      }}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-[#26478D] hover:bg-[#1e3a78] text-white text-xs font-semibold cursor-pointer"
+                    >
+                      <UserCircle2 className="w-4 h-4 shrink-0" />
+                      <span>{lang === 'ar' ? 'الملف الشخصي وإعدادات الحساب' : 'My Profile & Account'}</span>
+                    </button>
                   </div>
-                  <div className="divide-y divide-slate-100 dark:divide-white/5 max-h-80 overflow-y-auto">
-                    {state.users.map((u) => {
-                      const active = u.id === currentUser?.id;
-                      return (
-                        <button
-                          key={u.id}
-                          onClick={() => {
-                            switchUser(u.id);
-                            setUserMenuOpen(false);
-                          }}
-                          className={`w-full px-4 py-2.5 text-start flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-white/[0.05] cursor-pointer ${
-                            active ? 'bg-[#26478D]/10 dark:bg-[#26478D]/25' : ''
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <div className="text-xs font-semibold truncate">{lang === 'ar' ? u.nameAr : u.nameEn}</div>
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                              {lang === 'ar' ? u.roleLabelAr : u.roleLabelEn} · {u.deviceName}
-                            </div>
-                          </div>
-                          {active && <CheckCheck className="w-4 h-4 text-[#26478D] dark:text-blue-400 shrink-0" />}
-                        </button>
-                      );
-                    })}
-                  </div>
+
+                  {demoLoginEnabled && (
+                    <>
+                      <div className="px-4 py-2 border-b border-slate-100 dark:border-white/10 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                        {lang === 'ar' ? 'تبديل سريع (وضع التطوير)' : 'Quick Switch (Dev Mode)'}
+                      </div>
+                      <div className="divide-y divide-slate-100 dark:divide-white/5 max-h-56 overflow-y-auto">
+                        {state.users
+                          .filter((u) => u.active && (!u.accountStatus || u.accountStatus === 'نشط'))
+                          .map((u) => {
+                            const active = u.id === currentUser?.id;
+                            return (
+                              <button
+                                key={u.id}
+                                onClick={() => {
+                                  switchUser(u.id);
+                                  setUserMenuOpen(false);
+                                }}
+                                className={`w-full px-4 py-2.5 text-start flex items-center justify-between gap-2 hover:bg-slate-50 dark:hover:bg-white/[0.05] cursor-pointer ${
+                                  active ? 'bg-[#26478D]/10 dark:bg-[#26478D]/25' : ''
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <div className="text-xs font-semibold truncate">{lang === 'ar' ? u.nameAr : u.nameEn}</div>
+                                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                                    {lang === 'ar' ? u.roleLabelAr : u.roleLabelEn}
+                                  </div>
+                                </div>
+                                {active && <CheckCheck className="w-4 h-4 text-[#26478D] dark:text-blue-400 shrink-0" />}
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </>
+                  )}
+
                   <div className="p-2 border-t border-slate-100 dark:border-white/10 grid grid-cols-2 gap-1.5 bg-slate-50/70 dark:bg-white/[0.02]">
                     <button
                       type="button"

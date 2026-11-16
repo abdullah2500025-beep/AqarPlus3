@@ -285,7 +285,7 @@ export function createInitialSeed(): AqarDatabaseState {
         managerRating: 5,
         lastActivitySummary: 'مراجعة سياسة الأمان والنسخ الاحتياطي اليومية',
         security: {
-          twoFactorEnabled: true,
+          twoFactorEnabled: false,
           biometricEnabled: true,
           failedAttempts: 0,
           lastPasswordChangedAt: '2026-10-20T09:00:00.000Z',
@@ -318,7 +318,7 @@ export function createInitialSeed(): AqarDatabaseState {
         managerRating: 5,
         lastActivitySummary: 'اعتمد مصروف تشغيل المجمع قبل 18 دقيقة',
         security: {
-          twoFactorEnabled: true,
+          twoFactorEnabled: false,
           biometricEnabled: true,
           failedAttempts: 0,
           lastPasswordChangedAt: '2026-10-25T10:00:00.000Z',
@@ -351,7 +351,7 @@ export function createInitialSeed(): AqarDatabaseState {
         managerRating: 4.8,
         lastActivitySummary: 'سجل سند قبض 9,000 ر.س قبل 5 دقائق',
         security: {
-          twoFactorEnabled: true,
+          twoFactorEnabled: false,
           biometricEnabled: false,
           failedAttempts: 0,
           lastPasswordChangedAt: '2026-10-15T11:00:00.000Z',
@@ -546,7 +546,7 @@ export function createInitialSeed(): AqarDatabaseState {
         managerRating: 5,
         lastActivitySummary: 'صدّر تقرير التدقيق الشهري وسجل العكس المحاسبي',
         security: {
-          twoFactorEnabled: true,
+          twoFactorEnabled: false,
           biometricEnabled: false,
           failedAttempts: 0,
           lastPasswordChangedAt: '2026-10-18T09:00:00.000Z',

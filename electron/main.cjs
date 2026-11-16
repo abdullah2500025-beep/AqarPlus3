@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
@@ -80,6 +80,44 @@ function registerIpcHandlers() {
     ensureDir(paths.archiveDir);
     ensureDir(paths.documentsDir);
     return paths;
+  });
+
+  ipcMain.handle('aqar:is-safe-storage-available', async () => {
+    try {
+      return Boolean(safeStorage && safeStorage.isEncryptionAvailable());
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle('aqar:protect-secret', async (_event, plainText) => {
+    try {
+      if (typeof plainText !== 'string' || !plainText) {
+        return { protected: false, cipher: null };
+      }
+      if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+        return { protected: false, cipher: null };
+      }
+      const encrypted = safeStorage.encryptString(plainText);
+      return { protected: true, cipher: encrypted.toString('base64') };
+    } catch {
+      return { protected: false, cipher: null };
+    }
+  });
+
+  ipcMain.handle('aqar:unprotect-secret', async (_event, cipherBase64) => {
+    try {
+      if (typeof cipherBase64 !== 'string' || !cipherBase64) {
+        return null;
+      }
+      if (!safeStorage || !safeStorage.isEncryptionAvailable()) {
+        return null;
+      }
+      const buf = Buffer.from(cipherBase64, 'base64');
+      return safeStorage.decryptString(buf);
+    } catch {
+      return null;
+    }
   });
 }
 

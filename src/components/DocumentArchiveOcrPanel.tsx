@@ -35,6 +35,7 @@ import { CameraDocumentScannerModal } from './CameraDocumentScannerModal';
 import { MoveToArchiveButton } from './MoveToArchiveButton';
 import { ProcessedScanResult } from '../utils/documentScanProcessor';
 import { runGeminiOcrExtraction } from '../utils/ocrClient';
+import { UnifiedModalCloseButton, useEscapeKey } from './ui/UnifiedComponents';
 
 const ALL_CATEGORIES: DocumentCategory[] = [
   'عقود إيجار',
@@ -52,13 +53,21 @@ const ALL_CATEGORIES: DocumentCategory[] = [
 ];
 
 export function DocumentArchiveOcrPanel() {
-  const { state, currentUser, lang, hasPermission, mutate, pushToast, refreshState } = useAqar();
+  const { state, currentUser, lang, hasPermission, hasModulePermission, mutate, pushToast, refreshState } = useAqar();
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [showScannerModal, setShowScannerModal] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [cropInitialImage, setCropInitialImage] = useState<string | undefined>(undefined);
   const [previewDoc, setPreviewDoc] = useState<DocumentRecord | null>(null);
+
+  const canCreateDoc = hasModulePermission('documents', 'create') || hasPermission('manage_documents');
+  const canEditDoc = hasModulePermission('documents', 'edit') || hasPermission('manage_documents');
+  const canArchiveDoc = hasModulePermission('documents', 'delete_void') || hasModulePermission('archive', 'create') || hasPermission('manage_documents');
+  const canExportDoc = hasModulePermission('documents', 'export') || hasModulePermission('documents', 'manage');
+
+  useEscapeKey(showScannerModal && !showCameraModal, () => setShowScannerModal(false));
+  useEscapeKey(Boolean(previewDoc), () => setPreviewDoc(null));
 
   // Upload + OCR form states
   const [fileDataUrl, setFileDataUrl] = useState<string>('');
@@ -602,7 +611,7 @@ export function DocumentArchiveOcrPanel() {
           </select>
         </div>
 
-        {hasPermission('manage_documents') && (
+        {canCreateDoc && (
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => {
@@ -726,14 +735,16 @@ export function DocumentArchiveOcrPanel() {
                   <Eye className="w-3 h-3" />
                   <span>{lang === 'ar' ? 'معاينة' : 'View'}</span>
                 </button>
-                <button
-                  onClick={() => handleDownloadDocument(doc)}
-                  className="p-1.5 rounded-lg border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
-                  title={lang === 'ar' ? 'تنزيل' : 'Download'}
-                >
-                  <Download className="w-3 h-3" />
-                </button>
-                {!doc.archivedAt && hasPermission('manage_documents') && (
+                {canExportDoc && (
+                  <button
+                    onClick={() => handleDownloadDocument(doc)}
+                    className="p-1.5 rounded-lg border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
+                    title={lang === 'ar' ? 'تنزيل' : 'Download'}
+                  >
+                    <Download className="w-3 h-3" />
+                  </button>
+                )}
+                {!doc.archivedAt && canArchiveDoc && (
                   <MoveToArchiveButton
                     category="documents"
                     entityId={doc.id}
@@ -770,9 +781,7 @@ export function DocumentArchiveOcrPanel() {
                   </p>
                 </div>
               </div>
-              <button type="button" onClick={() => setShowScannerModal(false)} className="cursor-pointer p-1">
-                <X className="w-5 h-5" />
-              </button>
+              <UnifiedModalCloseButton onClick={() => setShowScannerModal(false)} lang={lang} />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
@@ -1163,26 +1172,25 @@ export function DocumentArchiveOcrPanel() {
                 >
                   <span>{lang === 'ar' ? 'واتساب' : 'WhatsApp'}</span>
                 </a>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-1.5 px-3 min-h-[42px] rounded-xl bg-[#26478D] text-white text-xs font-medium cursor-pointer"
-                >
-                  <span>{lang === 'ar' ? 'طباعة / PDF' : 'Print'}</span>
-                </button>
-                <button
-                  onClick={() => handleDownloadDocument(livePreviewDoc)}
-                  className="inline-flex items-center gap-1 px-3 min-h-[42px] rounded-xl border border-slate-200 dark:border-white/10 text-xs font-medium cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>{lang === 'ar' ? 'تنزيل' : 'Download'}</span>
-                </button>
-                <button
-                  onClick={() => setPreviewDoc(null)}
-                  className="min-w-[42px] min-h-[42px] flex items-center justify-center rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                {canExportDoc && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="inline-flex items-center gap-1.5 px-3 min-h-[42px] rounded-xl bg-[#26478D] text-white text-xs font-medium cursor-pointer"
+                    >
+                      <span>{lang === 'ar' ? 'طباعة / PDF' : 'Print'}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDownloadDocument(livePreviewDoc)}
+                      className="inline-flex items-center gap-1 px-3 min-h-[42px] rounded-xl border border-slate-200 dark:border-white/10 text-xs font-medium cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'تنزيل' : 'Download'}</span>
+                    </button>
+                  </>
+                )}
+                <UnifiedModalCloseButton onClick={() => setPreviewDoc(null)} lang={lang} />
               </div>
             </div>
 
@@ -1213,7 +1221,7 @@ export function DocumentArchiveOcrPanel() {
               </div>
             )}
 
-            {livePreviewDoc.dataUrl && !livePreviewDoc.ocrExtracted && hasPermission('manage_documents') && (
+            {livePreviewDoc.dataUrl && !livePreviewDoc.ocrExtracted && canEditDoc && (
               <div className="flex justify-end">
                 <button
                   type="button"
@@ -1236,7 +1244,7 @@ export function DocumentArchiveOcrPanel() {
                     <Sparkles className="w-4 h-4" />
                     <span>{lang === 'ar' ? 'البيانات المستخرجة بالتعرف الضوئي (OCR)' : 'OCR Extracted Metadata'}</span>
                   </div>
-                  {hasPermission('manage_documents') && (
+                  {canEditDoc && (
                     <button
                       type="button"
                       disabled={isPreviewOcrRunning}

@@ -19,11 +19,46 @@ export interface StoredOperationRecord {
 
 export interface StoredSessionRecord {
   tokenHash: string;
+  sessionId?: string;
   userId: string;
   deviceName: string;
+  appType?: 'web' | 'desktop';
+  deviceId?: string;
+  ipAddress?: string;
+  rememberMe?: boolean;
+  refreshTokenHash?: string | null;
+  refreshExpiresAt?: string | null;
   createdAt: string;
+  lastSeenAt?: string;
   expiresAt: string;
   revokedAt?: string | null;
+}
+
+export interface StoredInviteSecretRecord {
+  invitationId: string;
+  userId: string;
+  companyId: string;
+  tokenHash: string;
+  codeHash: string;
+  expiresAt: string;
+  usedAt?: string | null;
+  canceledAt?: string | null;
+  failedAttempts: number;
+  createdAt: string;
+}
+
+export type RecoveryPurpose = 'password_reset' | 'pin_reset' | 'verify_email' | 'verify_phone' | 'mfa_challenge';
+
+export interface StoredRecoveryTokenRecord {
+  id: string;
+  userId: string;
+  purpose: RecoveryPurpose;
+  targetValue?: string | null;
+  codeHash: string;
+  expiresAt: string;
+  usedAt?: string | null;
+  failedAttempts: number;
+  createdAt: string;
 }
 
 export interface UserCredentialStatus {
@@ -36,6 +71,8 @@ export interface UserCredentialStatus {
 const ARRAY_COLLECTIONS: (keyof AqarDatabaseState)[] = [
   'companies',
   'users',
+  'employeeInvitations',
+  'customRoles',
   'properties',
   'units',
   'meterReadings',
@@ -79,6 +116,7 @@ const ARRAY_COLLECTIONS: (keyof AqarDatabaseState)[] = [
 const SINGLETON_KEYS: (keyof AqarDatabaseState)[] = [
   'settings',
   'rolePermissions',
+  'roleModulePermissions',
   'counters',
   'processedIdempotencyKeys',
   'archiveLastNightlyRun',
@@ -141,14 +179,35 @@ export class SqlitePersistence {
 
       CREATE TABLE IF NOT EXISTS sessions (
         token_hash TEXT PRIMARY KEY,
+        session_id TEXT,
         user_id TEXT NOT NULL,
         device_name TEXT NOT NULL,
+        app_type TEXT DEFAULT 'web',
+        device_id TEXT,
+        ip_address TEXT,
+        remember_me INTEGER NOT NULL DEFAULT 1,
+        refresh_token_hash TEXT,
+        refresh_expires_at TEXT,
         created_at TEXT NOT NULL,
+        last_seen_at TEXT,
         expires_at TEXT NOT NULL,
         revoked_at TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id, revoked_at);
+
+      CREATE TABLE IF NOT EXISTS trusted_devices (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        device_hash TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        app_type TEXT NOT NULL DEFAULT 'web',
+        trusted_at TEXT NOT NULL,
+        last_used_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_trusted_devices_user ON trusted_devices (user_id, device_hash, revoked_at);
 
       CREATE TABLE IF NOT EXISTS user_credentials (
         user_id TEXT PRIMARY KEY,
@@ -156,6 +215,35 @@ export class SqlitePersistence {
         pin_hash TEXT,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS invite_secrets (
+        invitation_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        code_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        canceled_at TEXT,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_invite_token_hash ON invite_secrets (token_hash);
+
+      CREATE TABLE IF NOT EXISTS recovery_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        target_value TEXT,
+        code_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_recovery_user_purpose ON recovery_tokens (user_id, purpose, used_at);
 
       CREATE TABLE IF NOT EXISTS attachments (
         id TEXT PRIMARY KEY,
@@ -168,6 +256,17 @@ export class SqlitePersistence {
         created_at TEXT NOT NULL
       );
     `);
+
+    const cols = (this.db.prepare(`PRAGMA table_info(sessions)`).all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes('session_id')) this.db.exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT`);
+    if (!cols.includes('ip_address')) this.db.exec(`ALTER TABLE sessions ADD COLUMN ip_address TEXT`);
+    if (!cols.includes('remember_me')) this.db.exec(`ALTER TABLE sessions ADD COLUMN remember_me INTEGER NOT NULL DEFAULT 1`);
+    if (!cols.includes('last_seen_at')) this.db.exec(`ALTER TABLE sessions ADD COLUMN last_seen_at TEXT`);
+    if (!cols.includes('app_type')) this.db.exec(`ALTER TABLE sessions ADD COLUMN app_type TEXT DEFAULT 'web'`);
+    if (!cols.includes('device_id')) this.db.exec(`ALTER TABLE sessions ADD COLUMN device_id TEXT`);
+    if (!cols.includes('refresh_token_hash')) this.db.exec(`ALTER TABLE sessions ADD COLUMN refresh_token_hash TEXT`);
+    if (!cols.includes('refresh_expires_at')) this.db.exec(`ALTER TABLE sessions ADD COLUMN refresh_expires_at TEXT`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_refresh ON sessions (refresh_token_hash);`);
   }
 
   public getOrCreateSessionSecret(): string {
@@ -350,6 +449,13 @@ export class SqlitePersistence {
       .run(userId, nextPasswordHash, nextPinHash, now);
   }
 
+  public disableUserPin(userId: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`UPDATE user_credentials SET pin_hash = NULL, updated_at = ? WHERE user_id = ?`)
+      .run(now, userId);
+  }
+
   public getCredentialStatus(userId: string): UserCredentialStatus {
     const row = this.db
       .prepare(`SELECT user_id as userId, password_hash as passwordHash, pin_hash as pinHash, updated_at as updatedAt FROM user_credentials WHERE user_id = ?`)
@@ -362,29 +468,176 @@ export class SqlitePersistence {
     };
   }
 
-  public createSession(rawToken: string, userId: string, deviceName: string, expiresAt: string): void {
+  public createSession(
+    rawToken: string,
+    userId: string,
+    deviceName: string,
+    expiresAt: string,
+    opts?: {
+      sessionId?: string;
+      rememberMe?: boolean;
+      ipAddress?: string;
+      appType?: 'web' | 'desktop';
+      deviceId?: string;
+      rawRefreshToken?: string;
+      refreshExpiresAt?: string;
+    }
+  ): void {
+    const now = new Date().toISOString();
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO sessions (token_hash, user_id, device_name, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, NULL)`
+        `INSERT OR REPLACE INTO sessions (token_hash, session_id, user_id, device_name, app_type, device_id, ip_address, remember_me, refresh_token_hash, refresh_expires_at, created_at, last_seen_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
       )
-      .run(sha256Hex(rawToken), userId, deviceName, new Date().toISOString(), expiresAt);
+      .run(
+        sha256Hex(rawToken),
+        opts?.sessionId || null,
+        userId,
+        deviceName,
+        opts?.appType === 'desktop' ? 'desktop' : 'web',
+        opts?.deviceId || null,
+        opts?.ipAddress || null,
+        opts?.rememberMe === false ? 0 : 1,
+        opts?.rawRefreshToken ? sha256Hex(opts.rawRefreshToken) : null,
+        opts?.refreshExpiresAt || null,
+        now,
+        now,
+        expiresAt
+      );
   }
 
   public isSessionActive(rawToken: string): StoredSessionRecord | null {
     const row = this.db
       .prepare(
-        `SELECT token_hash as tokenHash, user_id as userId, device_name as deviceName, created_at as createdAt, expires_at as expiresAt, revoked_at as revokedAt FROM sessions WHERE token_hash = ?`
+        `SELECT token_hash as tokenHash, session_id as sessionId, user_id as userId, device_name as deviceName, app_type as appType, device_id as deviceId, ip_address as ipAddress, remember_me as rememberMeInt, refresh_token_hash as refreshTokenHash, refresh_expires_at as refreshExpiresAt, created_at as createdAt, last_seen_at as lastSeenAt, expires_at as expiresAt, revoked_at as revokedAt FROM sessions WHERE token_hash = ?`
       )
-      .get(sha256Hex(rawToken)) as StoredSessionRecord | undefined;
+      .get(sha256Hex(rawToken)) as (StoredSessionRecord & { rememberMeInt?: number }) | undefined;
     if (!row || row.revokedAt) return null;
     if (Date.now() > new Date(row.expiresAt).getTime()) return null;
-    return row;
+    return {
+      tokenHash: row.tokenHash,
+      sessionId: row.sessionId,
+      userId: row.userId,
+      deviceName: row.deviceName,
+      appType: row.appType === 'desktop' ? 'desktop' : 'web',
+      deviceId: row.deviceId,
+      ipAddress: row.ipAddress,
+      rememberMe: row.rememberMeInt !== 0,
+      refreshTokenHash: row.refreshTokenHash,
+      refreshExpiresAt: row.refreshExpiresAt,
+      createdAt: row.createdAt,
+      lastSeenAt: row.lastSeenAt || row.createdAt,
+      expiresAt: row.expiresAt,
+      revokedAt: row.revokedAt,
+    };
+  }
+
+  public findSessionByRefreshToken(rawRefreshToken: string): StoredSessionRecord | null {
+    if (!rawRefreshToken) return null;
+    const row = this.db
+      .prepare(
+        `SELECT token_hash as tokenHash, session_id as sessionId, user_id as userId, device_name as deviceName, app_type as appType, device_id as deviceId, ip_address as ipAddress, remember_me as rememberMeInt, refresh_token_hash as refreshTokenHash, refresh_expires_at as refreshExpiresAt, created_at as createdAt, last_seen_at as lastSeenAt, expires_at as expiresAt, revoked_at as revokedAt FROM sessions WHERE refresh_token_hash = ?`
+      )
+      .get(sha256Hex(rawRefreshToken)) as (StoredSessionRecord & { rememberMeInt?: number }) | undefined;
+    if (!row || row.revokedAt) return null;
+    const refExp = row.refreshExpiresAt || row.expiresAt;
+    if (Date.now() > new Date(refExp).getTime()) return null;
+    return {
+      tokenHash: row.tokenHash,
+      sessionId: row.sessionId,
+      userId: row.userId,
+      deviceName: row.deviceName,
+      appType: row.appType === 'desktop' ? 'desktop' : 'web',
+      deviceId: row.deviceId,
+      ipAddress: row.ipAddress,
+      rememberMe: row.rememberMeInt !== 0,
+      refreshTokenHash: row.refreshTokenHash,
+      refreshExpiresAt: row.refreshExpiresAt,
+      createdAt: row.createdAt,
+      lastSeenAt: row.lastSeenAt || row.createdAt,
+      expiresAt: row.expiresAt,
+      revokedAt: row.revokedAt,
+    };
+  }
+
+  public rotateSessionTokens(
+    oldRefreshToken: string,
+    newAccessToken: string,
+    newRefreshToken: string,
+    newExpiresAt: string,
+    newRefreshExpiresAt: string
+  ): boolean {
+    const now = new Date().toISOString();
+    const info = this.db
+      .prepare(
+        `UPDATE sessions SET token_hash = ?, refresh_token_hash = ?, expires_at = ?, refresh_expires_at = ?, last_seen_at = ? WHERE refresh_token_hash = ? AND revoked_at IS NULL`
+      )
+      .run(
+        sha256Hex(newAccessToken),
+        sha256Hex(newRefreshToken),
+        newExpiresAt,
+        newRefreshExpiresAt,
+        now,
+        sha256Hex(oldRefreshToken)
+      );
+    return Number(info.changes || 0) > 0;
+  }
+
+  public updateSessionLastSeen(rawToken: string): void {
+    this.db
+      .prepare(`UPDATE sessions SET last_seen_at = ? WHERE token_hash = ? AND revoked_at IS NULL`)
+      .run(new Date().toISOString(), sha256Hex(rawToken));
+  }
+
+  public listActiveSessionsForUser(userId: string, currentRawToken?: string) {
+    const now = new Date().toISOString();
+    const currentHash = currentRawToken ? sha256Hex(currentRawToken) : '';
+    const rows = this.db
+      .prepare(
+        `SELECT token_hash as tokenHash, session_id as sessionId, user_id as userId, device_name as deviceName, app_type as appType, device_id as deviceId, ip_address as ipAddress, remember_me as rememberMeInt, created_at as createdAt, last_seen_at as lastSeenAt, expires_at as expiresAt FROM sessions WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC`
+      )
+      .all(userId, now) as {
+      tokenHash: string;
+      sessionId?: string | null;
+      userId: string;
+      deviceName: string;
+      appType?: string | null;
+      deviceId?: string | null;
+      ipAddress?: string | null;
+      rememberMeInt: number;
+      createdAt: string;
+      lastSeenAt?: string | null;
+      expiresAt: string;
+    }[];
+    return rows.map((r) => ({
+      id: r.sessionId || r.tokenHash.slice(0, 16),
+      sessionId: r.sessionId || r.tokenHash.slice(0, 16),
+      userId: r.userId,
+      deviceName: r.deviceName,
+      appType: (r.appType === 'desktop' ? 'desktop' : 'web') as 'web' | 'desktop',
+      deviceId: r.deviceId || undefined,
+      ipAddress: r.ipAddress || undefined,
+      rememberMe: r.rememberMeInt !== 0,
+      createdAt: r.createdAt,
+      lastSeenAt: r.lastSeenAt || r.createdAt,
+      expiresAt: r.expiresAt,
+      isCurrent: Boolean(currentHash && r.tokenHash === currentHash),
+    }));
   }
 
   public revokeSession(rawToken: string): void {
     this.db
       .prepare(`UPDATE sessions SET revoked_at = ? WHERE token_hash = ?`)
       .run(new Date().toISOString(), sha256Hex(rawToken));
+  }
+
+  public revokeSessionById(userId: string, sessionIdOrPrefix: string): number {
+    const now = new Date().toISOString();
+    const info = this.db
+      .prepare(
+        `UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL AND (session_id = ? OR substr(token_hash, 1, 16) = ?)`
+      )
+      .run(now, userId, sessionIdOrPrefix, sessionIdOrPrefix);
+    return Number(info.changes || 0);
   }
 
   public revokeOtherSessionsForUser(userId: string, keepRawToken?: string): number {
@@ -399,6 +652,200 @@ export class SqlitePersistence {
       .prepare(`UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`)
       .run(now, userId);
     return Number(info.changes || 0);
+  }
+
+  public registerOrTouchTrustedDevice(
+    userId: string,
+    deviceId: string,
+    deviceName: string,
+    appType: 'web' | 'desktop' = 'web'
+  ): void {
+    if (!deviceId) return;
+    const deviceHash = sha256Hex(`${userId}:${deviceId}`);
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare(`SELECT id FROM trusted_devices WHERE user_id = ? AND device_hash = ? AND revoked_at IS NULL`)
+      .get(userId, deviceHash) as { id: string } | undefined;
+    if (existing) {
+      this.db
+        .prepare(`UPDATE trusted_devices SET device_name = ?, app_type = ?, last_used_at = ? WHERE id = ?`)
+        .run(deviceName, appType, now, existing.id);
+      return;
+    }
+    this.db
+      .prepare(
+        `INSERT INTO trusted_devices (id, user_id, device_hash, device_name, app_type, trusted_at, last_used_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+      )
+      .run(`td-${crypto.randomBytes(6).toString('hex')}`, userId, deviceHash, deviceName, appType, now, now);
+  }
+
+  public isTrustedDevice(userId: string, deviceId?: string): boolean {
+    if (!deviceId) return false;
+    const deviceHash = sha256Hex(`${userId}:${deviceId}`);
+    const row = this.db
+      .prepare(`SELECT id FROM trusted_devices WHERE user_id = ? AND device_hash = ? AND revoked_at IS NULL`)
+      .get(userId, deviceHash) as { id: string } | undefined;
+    return Boolean(row);
+  }
+
+  public listTrustedDevices(userId: string, currentDeviceId?: string) {
+    const currentHash = currentDeviceId ? sha256Hex(`${userId}:${currentDeviceId}`) : '';
+    const rows = this.db
+      .prepare(
+        `SELECT id, user_id as userId, device_hash as deviceHash, device_name as deviceName, app_type as appType, trusted_at as trustedAt, last_used_at as lastUsedAt FROM trusted_devices WHERE user_id = ? AND revoked_at IS NULL ORDER BY last_used_at DESC`
+      )
+      .all(userId) as {
+      id: string;
+      userId: string;
+      deviceHash: string;
+      deviceName: string;
+      appType: string;
+      trustedAt: string;
+      lastUsedAt: string;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      deviceName: r.deviceName,
+      appType: (r.appType === 'desktop' ? 'desktop' : 'web') as 'web' | 'desktop',
+      trustedAt: r.trustedAt,
+      lastUsedAt: r.lastUsedAt,
+      isCurrent: Boolean(currentHash && r.deviceHash === currentHash),
+    }));
+  }
+
+  public revokeTrustedDevice(userId: string, trustedDeviceId: string): number {
+    const info = this.db
+      .prepare(`UPDATE trusted_devices SET revoked_at = ? WHERE user_id = ? AND id = ? AND revoked_at IS NULL`)
+      .run(new Date().toISOString(), userId, trustedDeviceId);
+    return Number(info.changes || 0);
+  }
+
+  public createInviteSecret(input: {
+    invitationId: string;
+    userId: string;
+    companyId: string;
+    rawToken: string;
+    verificationCode: string;
+    expiresAt: string;
+  }): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO invite_secrets (invitation_id, user_id, company_id, token_hash, code_hash, expires_at, used_at, canceled_at, failed_attempts, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?)`
+      )
+      .run(
+        input.invitationId,
+        input.userId,
+        input.companyId,
+        sha256Hex(input.rawToken),
+        hashSecret(input.verificationCode),
+        input.expiresAt,
+        now
+      );
+  }
+
+  public findInviteSecretByToken(rawToken: string): StoredInviteSecretRecord | null {
+    if (!rawToken) return null;
+    const row = this.db
+      .prepare(
+        `SELECT invitation_id as invitationId, user_id as userId, company_id as companyId, token_hash as tokenHash, code_hash as codeHash, expires_at as expiresAt, used_at as usedAt, canceled_at as canceledAt, failed_attempts as failedAttempts, created_at as createdAt FROM invite_secrets WHERE token_hash = ?`
+      )
+      .get(sha256Hex(rawToken)) as StoredInviteSecretRecord | undefined;
+    return row || null;
+  }
+
+  public verifyAndConsumeInviteSecret(
+    rawToken: string,
+    verificationCode: string
+  ): { ok: true; record: StoredInviteSecretRecord } | { ok: false; reason: string; expired?: boolean } {
+    const rec = this.findInviteSecretByToken(rawToken);
+    if (!rec) return { ok: false, reason: 'رابط الدعوة غير صالح أو غير موجود' };
+    if (rec.canceledAt) return { ok: false, reason: 'تم إلغاء هذه الدعوة من قِبل الإدارة' };
+    if (rec.usedAt) return { ok: false, reason: 'تم استخدام هذه الدعوة وتفعيل الحساب مسبقاً' };
+    if (Date.now() > new Date(rec.expiresAt).getTime()) {
+      return { ok: false, reason: 'انتهت صلاحية رابط الدعوة — اطلب من مدير الشركة إعادة الإرسال', expired: true };
+    }
+    if (rec.failedAttempts >= 5) {
+      return { ok: false, reason: 'تم تعليق رمز التحقق لهذه الدعوة لكثرة المحاولات الخاطئة' };
+    }
+    if (!verifySecret(verificationCode.trim(), rec.codeHash)) {
+      this.db
+        .prepare(`UPDATE invite_secrets SET failed_attempts = failed_attempts + 1 WHERE invitation_id = ?`)
+        .run(rec.invitationId);
+      return { ok: false, reason: 'رمز التحقق المكون من 6 أرقام غير صحيح' };
+    }
+    this.db
+      .prepare(`UPDATE invite_secrets SET used_at = ? WHERE invitation_id = ?`)
+      .run(new Date().toISOString(), rec.invitationId);
+    return { ok: true, record: rec };
+  }
+
+  public cancelInviteSecret(invitationId: string): void {
+    this.db
+      .prepare(`UPDATE invite_secrets SET canceled_at = ? WHERE invitation_id = ? AND used_at IS NULL`)
+      .run(new Date().toISOString(), invitationId);
+  }
+
+  public createRecoveryToken(input: {
+    id: string;
+    userId: string;
+    purpose: RecoveryPurpose;
+    targetValue?: string;
+    code: string;
+    expiresAt: string;
+  }): void {
+    const now = new Date().toISOString();
+    // Invalidate any previous unused tokens for the same user & purpose
+    this.db
+      .prepare(`UPDATE recovery_tokens SET used_at = ? WHERE user_id = ? AND purpose = ? AND used_at IS NULL`)
+      .run(now, input.userId, input.purpose);
+
+    this.db
+      .prepare(
+        `INSERT INTO recovery_tokens (id, user_id, purpose, target_value, code_hash, expires_at, used_at, failed_attempts, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, 0, ?)`
+      )
+      .run(
+        input.id,
+        input.userId,
+        input.purpose,
+        input.targetValue || null,
+        hashSecret(input.code),
+        input.expiresAt,
+        now
+      );
+  }
+
+  public verifyAndConsumeRecoveryToken(
+    userId: string,
+    purpose: RecoveryPurpose,
+    code: string
+  ): { ok: true; record: StoredRecoveryTokenRecord } | { ok: false; reason: string } {
+    const row = this.db
+      .prepare(
+        `SELECT id, user_id as userId, purpose, target_value as targetValue, code_hash as codeHash, expires_at as expiresAt, used_at as usedAt, failed_attempts as failedAttempts, created_at as createdAt FROM recovery_tokens WHERE user_id = ? AND purpose = ? AND used_at IS NULL ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(userId, purpose) as StoredRecoveryTokenRecord | undefined;
+
+    if (!row) {
+      return { ok: false, reason: 'لا يوجد طلب رمز تحقق نشط — اطلب رمزاً جديداً' };
+    }
+    if (Date.now() > new Date(row.expiresAt).getTime()) {
+      return { ok: false, reason: 'انتهت صلاحية رمز التحقق — اطلب رمزاً جديداً' };
+    }
+    if (row.failedAttempts >= 5) {
+      return { ok: false, reason: 'تم تجاوز الحد الأقصى لمحاولات إدخال الرمز (5 محاولات) — اطلب رمزاً جديداً' };
+    }
+    if (!verifySecret(code.trim(), row.codeHash)) {
+      this.db
+        .prepare(`UPDATE recovery_tokens SET failed_attempts = failed_attempts + 1 WHERE id = ?`)
+        .run(row.id);
+      return { ok: false, reason: 'رمز التحقق غير صحيح' };
+    }
+    this.db
+      .prepare(`UPDATE recovery_tokens SET used_at = ? WHERE id = ?`)
+      .run(new Date().toISOString(), row.id);
+    return { ok: true, record: row };
   }
 
   public getDiagnostics() {
